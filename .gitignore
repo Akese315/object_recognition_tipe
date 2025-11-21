@@ -1,0 +1,6 @@
+__pycache__
+dataset/
+dataset_yolo_format/
+.venv
+face_dataset/
+model/
