@@ -54,11 +54,11 @@ class BoundingBox:
         self.class_tensor = np.zeros(num_classes, dtype=np.float32)
         self.class_tensor[class_id] = 1.0
 
-    def get_cell_position(self, grid_division:int):
+    def get_cell_position(self, grid_division_x:int, grid_division_y:int):
+
         
-        
-        j_cell = math.floor(self.x_center * grid_division)  # colonne
-        i_cell = math.floor(self.y_center *grid_division) # ligne
+        j_cell = math.floor(self.x_center * grid_division_x)  # colonne
+        i_cell = math.floor(self.y_center *grid_division_y) # ligne
         if j_cell == 53:
             print("j cell 53, :", self.x_center)
         return (i_cell,j_cell)
@@ -101,18 +101,18 @@ class BoundingBox:
             self.class_tensor
         ])
 
-    def get_denormalized_tensor(self, target_size: Tuple[int, int], i_cell:int,j_cell:int, grid_division) -> np.ndarray:
+    def get_denormalized_tensor(self, target_size: Tuple[int, int], i_cell:int,j_cell:int, grid_division_x:int, grid_division_y:int) -> np.ndarray:
         t = self.get_tensor().copy()
         x_scale, y_scale = target_size
-        t[1] = (j_cell + t[1])/grid_division * x_scale
-        t[2] = (i_cell + t[2])/grid_division * y_scale
+        t[1] = (j_cell + t[1])/grid_division_x * x_scale
+        t[2] = (i_cell + t[2])/grid_division_y * y_scale
         t[3] *= x_scale
         t[4] *= y_scale
         return t
 
     @classmethod
     def from_tensor(
-        cls, tensor: np.ndarray, num_classes: int, i_cell:int,j_cell:int, grid_division
+        cls, tensor: np.ndarray, num_classes: int, i_cell:int,j_cell:int, grid_division_x:int, grid_division_y:int
     ) -> "BoundingBox":
         
         """Create a Boundinx from a tensor with the following structure:\n
@@ -130,8 +130,8 @@ class BoundingBox:
 
         x_center_cell, y_center_cell, w, h = np_tensor[1:5]
 
-        x_center = (j_cell + x_center_cell)/grid_division
-        y_center = (i_cell + y_center_cell)/grid_division
+        x_center = (j_cell + x_center_cell)/grid_division_x
+        y_center = (i_cell + y_center_cell)/grid_division_y
         class_prob = np.max(np_tensor[5:5+num_classes])
         class_id = int(np.argmax(np_tensor[5:5+num_classes]))
         return cls(is_detected,x_center,y_center, w, h, class_id, num_classes,class_prob)
@@ -163,13 +163,13 @@ class Label:
         return self.bb_boxes
     
 
-class   CustomImage:
+class CustomImage:
     def __init__(
         self,
         image_tensor: torch.Tensor,
         bounding_boxes: list[BoundingBox],
         target_size: Tuple[int, int] = (500, 500),
-        grid_division = 52,
+        reduction_factor: int = 8,
         mean: Optional[list[float]] = None,
         std: Optional[list[float]] = None
         ):
@@ -177,7 +177,9 @@ class   CustomImage:
         self.target_size = target_size
         self.mean = mean or [0.485, 0.456, 0.406]
         self.std = std or [0.229, 0.224, 0.225]
-        self.grid_division = grid_division
+        self.reduction_factor = reduction_factor
+        self.grid_division_x = target_size[0] // reduction_factor
+        self.grid_division_y = target_size[1] // reduction_factor
 
         # Chargement
         
@@ -217,9 +219,9 @@ class   CustomImage:
         #making the center of the objective relative to the cell
         
         for box in self._bb_boxes:
-            coordinates = box.get_cell_position(self.grid_division)
-            box.x_center_cell = (box.x_center*self.grid_division) - coordinates[1]
-            box.y_center_cell = (box.y_center*self.grid_division) - coordinates[0]
+            coordinates = box.get_cell_position(self.grid_division_x, self.grid_division_y)
+            box.x_center_cell = (box.x_center*self.grid_division_x) - coordinates[1]
+            box.y_center_cell = (box.y_center*self.grid_division_y) - coordinates[0]
 
     def set_std_mean(self, std: list[float], mean: list[float]):
         self._std = std
@@ -275,8 +277,8 @@ class   CustomImage:
 
         # GT (bleu)
         for box in self._bb_boxes:
-            cell_position = box.get_cell_position(self.grid_division)
-            coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division))
+            cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
+            coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
             x1 = int(coordinates.x_center - coordinates.width / 2)
             y1 = int(coordinates.y_center - coordinates.height / 2)
             x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -289,8 +291,8 @@ class   CustomImage:
         # Prédictions (vert)
         if predicted_bb_boxes is not None:
             for box in predicted_bb_boxes:
-                cell_position = box.get_cell_position(self.grid_division)
-                coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division))
+                cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
+                coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
                 x1 = int(coordinates.x_center - coordinates.width / 2)
                 y1 = int(coordinates.y_center - coordinates.height / 2)
                 x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -300,9 +302,12 @@ class   CustomImage:
 
         image = PILImage.fromarray(img)
         return image
+    
+    def get_grid_division(self) -> Tuple[int,int]:
+        return (self.grid_division_x, self.grid_division_y)
 
     def __repr__(self):
-        return f"CustomImage({self.file_name}, boxes={len(self._bb_boxes)}, size={self._original_size} → {self.target_size})"
+        return f"CustomImage(boxes={len(self._bb_boxes)}, size={self._original_size} → {self.target_size})"
 
 
 def get_classes(directory:str):

@@ -11,54 +11,58 @@ import albumentations as Albu
 from PIL import Image as PILImage
 from torchvision import transforms
 from tqdm.auto import tqdm
+from torch.utils.data import Sampler
+import random
 
 
 class CardRecognitionDataset(Dataset):
-    def __init__(self, directory, is_dark_and_white=False, n_cells = 3,target_size : Tuple[int] = (416,416), bounding_boxes_ratio =[]):  
-        
+    def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[]):  
+        self.mean = [0.485, 0.456, 0.406] # mean ImageNet values
+        self.std = [0.229, 0.224, 0.225] # standard ImageNet values
+
         self.transform = Albu.Compose([
-            # --- 1. Transformations Géométriques de base ---
+            # --- 1. transformations géométriques de base ---
             Albu.HorizontalFlip(p=0.5),
             Albu.VerticalFlip(p=0.2),
             
             Albu.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=45, border_mode=0, p=0.7),
 
-            # --- 2. Distorsions ---
+            # --- 2. distorsions ---
             Albu.OneOf([
                 Albu.OpticalDistortion(distort_limit=0.05, shift_limit=0.05, p=1),
                 Albu.GridDistortion(num_steps=5, distort_limit=0.05, p=1),
                 Albu.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=1),
             ], p=0.3),
 
-            # --- 3. Qualité et Texture ---
+            # --- 3. qualité et texture ---
             Albu.OneOf([
                 Albu.ImageCompression(quality_lower=85, quality_upper=95, p=1),
                 Albu.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1), # CORRECTION ICI (pas d'espace)
                 Albu.ToGray(p=1),
             ], p=0.2),
 
-            # --- 4. Couleur et Luminosité ---
+            # --- 4. couleur et luminosité ---
             Albu.OneOf([
                 Albu.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1),
                 Albu.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1),
                 Albu.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=1),
             ], p=0.5),
 
-            # --- 5. Flou et Netteté ---
+            # --- 5. flou et netteté ---
             Albu.OneOf([
                 Albu.GaussianBlur(blur_limit=(3, 7), p=1),
                 Albu.MotionBlur(blur_limit=3, p=1),
                 Albu.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=1),
             ], p=0.3),
 
-            # --- 6. Conditions Climatiques ---
+            # --- 6. conditions climatiques ---
             Albu.OneOf([
                 Albu.RandomRain(brightness_coefficient=0.9, drop_width=1, blur_value=5, p=1),
                 Albu.RandomShadow(num_shadows_lower=1, num_shadows_upper=3, shadow_dimension=5, shadow_roi=(0, 0.5, 1, 1), p=1),
                 Albu.RandomFog(fog_coef_lower=0.3, fog_coef_upper=0.5, alpha_coef=0.1, p=1),
             ], p=0.1),
 
-            # --- 7. Regularization (Trous) ---
+            # --- 7. regularization (trous) ---
             Albu.CoarseDropout(
                 max_holes=8, 
                 max_height=32, 
@@ -81,53 +85,37 @@ class CardRecognitionDataset(Dataset):
         file_names = get_images_file_name(directory)
         N = len(file_names)
         A = len(bounding_boxes_ratio)
-        H = target_size[1]
-        W = target_size[0]  
+        
         C = len(classes) 
-        S = n_cells
         if is_dark_and_white:
             print("dark and white")
-        self.features = torch.zeros((N,3,H, W), dtype=torch.float32)
-        self.labels = torch.zeros((N,S,S,A,5+C), dtype=torch.float32)
+        
         
         self.custom_images : list[CustomImage] = []
         self.length = N
         self.n_classes = C
-        self.n_cells = S
         self.bboxes_ratio = bounding_boxes_ratio
+        self.reduction_factor = reduction_factor
+        self.image_size_groups = {}
 
-
-        for i in tqdm(range(N), desc="Traitement des labels", leave=True):
-            file_name = file_names[i]
+        for idx in tqdm(range(100), desc="Traitement des labels", leave=True):
+            file_name = file_names[idx]
             label = get_label(directory,file_name.replace(".jpg",".txt"),C)
             bounding_boxes = label.get_bounding_boxes()
             file_path = directory+"/images/"+file_name
             image_pil = PILImage.open(file_path).convert("RGB")
             image_tensor = transforms.ToTensor()(image_pil)
-            image = CustomImage(image_tensor,bounding_boxes,target_size)
-            
-            for bounding_box in bounding_boxes:
-                bb_box_index = bounding_box.get_bounding_box_index(bounding_boxes_ratio)
-                i_cell,j_cell =  bounding_box.get_cell_position(S)
-                label = torch.tensor(bounding_box.get_tensor(), dtype=torch.float32)
-                print("i cell : ",i_cell, "j cell :",j_cell)
-
-                self.labels[int(i), int(i_cell), int(j_cell), int(bb_box_index)] = label
-
-            self.features[i] = image.get_raw_tensor()
+            target_size = (image_pil.size[0]//self.reduction_factor, image_pil.size[1]//self.reduction_factor)
+            image = CustomImage(image_tensor,bounding_boxes,target_size,self.reduction_factor,self.mean,self.std)
+            if target_size not in self.image_size_groups:
+                self.image_size_groups[target_size] = []
+            self.image_size_groups[target_size].append(idx)
             self.custom_images.append(image)
        
-        self.features_pil = self.features.clone()
-        self.mean = self.features.mean(dim=[0, 2, 3]).tolist()  # [3]
-        self.std  = self.features.std(dim=[0, 2, 3]).tolist()   # [3]
+     
 
         print(f"Mean: {self.mean}")
         print(f"Std:  {self.std}")
-
-        for img in self.custom_images:
-            img.set_std_mean(std=self.std, mean=self.mean)
-            '''self.features[i] = img.get_normalized_image()
-            img.show_image()'''
 
     def get_mean(self):
         return self.mean
@@ -137,6 +125,9 @@ class CardRecognitionDataset(Dataset):
     
     def get_classes(self):
         return self.n_classes
+    
+    def get_image_size_groups(self)->dict:
+        return self.image_size_groups
 
     def __len__(self):
         return self.length
@@ -145,10 +136,12 @@ class CardRecognitionDataset(Dataset):
 
         image:CustomImage = self.custom_images[index]
         image_tensor = image.get_raw_tensor()
+        grid_division_x, grid_division_y = image.get_grid_division()
 
         image_np = np.transpose(image_tensor.numpy(), (1, 2, 0)) 
         bb_boxes = image.get_bounding_boxes()
-        label = self.labels[index].clone()
+        grid_division_x, grid_division_y = image.get_grid_division()
+        label = torch.zeros(grid_division_x, grid_division_y, len(self.bboxes_ratio), 5 + self.n_classes)
         
         bb_boxes_yolo_format = []
         bb_boxes_classes = []
@@ -177,15 +170,68 @@ class CardRecognitionDataset(Dataset):
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
             x_center,y_center,width,height =torch.tensor(aug_boxes[i])
             box = BoundingBox(True,x_center,y_center,width,height,box.class_id,box.num_classes)
-            new_coordinates = box.get_cell_position(self.n_cells)
+            new_coordinates = box.get_cell_position(grid_division_x, grid_division_y)
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
             label[new_coordinates[0],new_coordinates[1],anchor_index,1:5] = torch.tensor(aug_boxes[i])
             boxes.append(box)
 
 
-        image = CustomImage(aug_image,boxes,image.target_size,image.grid_division,image.mean, image.std)
+        image = CustomImage(aug_image,boxes,image.target_size,self.reduction_factor,image.mean, image.std)
 
-        return image, label
+        return image, label # retourne l'image custom et le tenseur label ( tuple[CustomImage,torch.Tensor] )
+    
+class CustomBatchSampler(Sampler):
+    def __init__(self, dataset: CardRecognitionDataset, batch_size: int,groups:Optional[dict]=None):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.batches = []
+        self.indices = list(range(len(dataset)))
+        cleaned_groups = {k: v for k, v in groups.items() if v}
+        self.image_size_group = cleaned_groups
+
+        self._create_batches()
+
+    def _create_batches(self):
+        # create batches renvoie uniquement des tableaux d'indices
+
+        self.batches = []
+        # Pour chaque groupe de taille (ex: 1024x768)
+        for size, indices in self.image_size_group.items():
+            # On mélange les indices dans ce groupe
+            random.shuffle(indices)
+            
+            # Si pas assez d'images pour faire un batch complet ?
+            # Option choisie : On complète avec des doublons (Data Augmentation fera le reste)
+            count = len(indices)
+            print(f"Groupe taille {size} a {count} images.")
+            if count < self.batch_size:
+                # On duplique les indices existants jusqu'à remplir le batch
+                # Ex: indices=[1], batch=4 -> [1, 1, 1, 1]
+                extended_indices = indices * (self.batch_size // count + 1)
+                indices = extended_indices[:self.batch_size]
+            
+            # Création des chunks de taille batch_size
+            for i in range(0, len(indices), self.batch_size):
+                batch = indices[i : i + self.batch_size]
+                
+                # Si le dernier morceau est trop petit, on le jette ou on le complète
+                # Ici on le complète (drop_last=False logic)
+                if len(batch) < self.batch_size and len(batch) > 0:
+                    needed = self.batch_size - len(batch)
+                    # On complète avec des images aléatoires DU MÊME GROUPE
+                    extras = random.choices(indices, k=needed)
+                    batch.extend(extras)
+                
+                if len(batch) == self.batch_size:
+                    self.batches.append(batch) 
+
+    def __iter__(self):
+        random.shuffle(self.batches)
+        for batch in self.batches:
+            yield batch
+
+    def __len__(self):
+        return len(self.batches)
 
 def custom_collate_fn(batch):
     custom_images = [item[0] for item in batch]

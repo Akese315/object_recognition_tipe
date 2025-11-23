@@ -59,7 +59,7 @@ class LightweightYOLO(nn.Module):
         super(LightweightYOLO, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
-        self.grid_divider = (2**conv_layer)*divider
+        self.reduction_factor = (2**conv_layer)*divider
     
         base_kernel_num = 32
         in_channels = 3
@@ -73,26 +73,28 @@ class LightweightYOLO(nn.Module):
         self.backbone = nn.Sequential(*layers)
         self.head = YOLOHead(self.num_classes,self.num_anchors)
 
+
     def forward(self, x):
 
         B, _, H, W = x.shape
 
-        if H % self.grid_divider != 0 or W % self.grid_divider != 0:
-            new_H = (H // self.grid_divider + 1) * self.grid_divider
-            new_W = (W // self.grid_divider + 1) * self.grid_divider
+        if H % self.reduction_factor != 0 or W % self.reduction_factor != 0:
+            new_H = (H // self.reduction_factor + 1) * self.reduction_factor
+            new_W = (W // self.reduction_factor + 1) * self.reduction_factor
             print(f"Redimensionnement de l'entrée de ({H}, {W}) à ({new_H}, {new_W}) pour correspondre à la grille.")
             x = nn.functional.interpolate(x, size=(new_H, new_W), mode='bilinear', align_corners=False)
 
         features = self.backbone(x)
         return self.head(features)
     
-
+    def get_reduction_factor(self):
+        return self.reduction_factor
 
 class YoloLoss(nn.Module):
     def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0):
         super().__init__()
         self.mse = nn.MSELoss(reduction='sum')
-        self.bce = nn.BCEWithLogitsLoss(reduction="mean")  # Changé en BCELoss (après sigmoid)
+        self.bce = nn.BCELoss(reduction="mean")  # Changé en BCELoss (après sigmoid)
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
