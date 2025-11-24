@@ -7,13 +7,13 @@ from YOLO_loader import BoundingBox
 from model import LightweightYOLO
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'model/version6.pth'
+MODEL_PATH = 'model/version10.pth'
 IMG_SIZE = 416
 N_CELL = 52
 N_ANCHORS = 3
-N_CLASS = 3
-CONF_THRESHOLD = 0.9
-CLASS_THESHOLD = 0.3
+N_CLASS = 1
+CONF_THRESHOLD = 0.2
+CLASS_THESHOLD = 0.2
 IOU_THRESHOLD = 0.4
 
 CLASSES = ['card', 'face']
@@ -78,7 +78,7 @@ while True:
         
         # Appliquer la suppression non maximale
 
-        
+        print("Nombre de boîtes avant NMS :", len(pred_boxes))
         # Dessiner toutes les bounding boxes retrouvées
         for box in pred_boxes:
 

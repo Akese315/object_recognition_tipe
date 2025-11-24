@@ -53,17 +53,17 @@ class YOLOHead(nn.Module):
 
     
 class LightweightYOLO(nn.Module):
-    def __init__(self, num_classes=20, num_anchors=3, conv_layer=3, divider=1):
+    def __init__(self, num_classes=20, num_anchors=3, conv_layer=3,base_kernel_num=32, divider=1):
         super(LightweightYOLO, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
         self.reduction_factor = (2**conv_layer) * divider
-    
-        base_kernel_num = 32
+        self.base_kernel_num = base_kernel_num
+
         in_channels = 3
         layers = []
         for i in range(conv_layer):
-            out_channels = base_kernel_num * (2 ** i)
+            out_channels = self.base_kernel_num * (2 ** i)
             layers.append(ConvBlock(in_channels, out_channels, kernel_size=3, stride=1, padding=1))
             layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
             in_channels = out_channels
