@@ -13,7 +13,7 @@ N_CELL = 52
 N_ANCHORS = 3
 N_CLASS = 3
 CONF_THRESHOLD = 0.9
-CLASS_THESHOLD = 0.2
+CLASS_THESHOLD = 0.3
 IOU_THRESHOLD = 0.4
 
 CLASSES = ['card', 'face']
@@ -42,7 +42,7 @@ if not cap.isOpened():
     exit()
 
 print("Inférence en temps réel démarrée. Appuie sur 'q' pour quitter.")
-
+reduction = model.get_reduction_factor()
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -56,13 +56,13 @@ while True:
     pil_img = Image.fromarray(frame_rgb)
     input_tensor = transform(pil_img).unsqueeze(0).to(device)
 
-
-    # Inférence
     with torch.no_grad():
         output = model(input_tensor)  # [B, H, W, A, 5+C]
 
+        
+
         # Parcourir la grille et les ancres pour récupérer toutes les prédictions
-        B, H, W, A, S = output.shape
+        B,H, W, A, S = output.shape
         pred_boxes = []
         for i in range(H):
             for j in range(W):
@@ -71,20 +71,19 @@ while True:
                     
                     if pred[0].item() > CONF_THRESHOLD:
                         # Construire un objet BoundingBox depuis le tenseur
-                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j, N_CELL)
+                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j,  W, H)
                         if box.class_id_prob >= CLASS_THESHOLD:
                           # Limiter le nombre de boîtes pour éviter les débordements
                             pred_boxes.append(box)
         
         # Appliquer la suppression non maximale
 
-        print(len(pred_boxes))
         
         # Dessiner toutes les bounding boxes retrouvées
         for box in pred_boxes:
 
-            i_cell, j_cell = box.get_cell_position(N_CELL)
-            den = box.get_denormalized_tensor((orig_w, orig_h), i_cell, j_cell, N_CELL)
+            i_cell, j_cell = box.get_cell_position(int(W//reduction), int(H//reduction))
+            den = box.get_denormalized_tensor((orig_w, orig_h), i_cell, j_cell,  int(W//reduction), int(H//reduction))
             # den: [obj, x_center, y_center, width, height, ...]
             x_center = den[1]
             y_center = den[2]

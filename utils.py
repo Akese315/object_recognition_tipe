@@ -4,7 +4,7 @@ import numpy as np
 import scipy
 import numpy as np
 from typing import List, Optional
-
+from YOLO_loader import BoundingBox
 import torch
 import numpy as np
 import math
@@ -104,9 +104,7 @@ def mean(tensor):
 
 
 def find_objects(tensor):
-    mask = tensor[:,:,:,0] ==1
-    mask2d = mask.any(dim=2)
-    coordinates = torch.nonzero(mask2d, as_tuple=False)
-    #c1, c2, c3 = coordinates[:,0], coordinates[:,1], coordinates[:,2]
-    return coordinates
+    mask = tensor[...,0] ==1
+    coordinates = torch.nonzero(mask, as_tuple=False)
+    return coordinates  
 

@@ -14,7 +14,6 @@ from tqdm.auto import tqdm
 from torch.utils.data import Sampler
 import random
 
-
 class CardRecognitionDataset(Dataset):
     def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[]):  
         self.mean = [0.485, 0.456, 0.406] # mean ImageNet values
@@ -33,6 +32,18 @@ class CardRecognitionDataset(Dataset):
                 Albu.GridDistortion(num_steps=5, distort_limit=0.05, p=1),
                 Albu.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=1),
             ], p=0.3),
+
+            # --- 7. regularization (trous) ---
+            Albu.CoarseDropout(
+                max_holes=8, 
+                max_height=32, 
+                max_width=32, 
+                min_holes=1, 
+                min_height=8, 
+                min_width=8, 
+                fill_value=0, 
+                p=0.5
+            ),
 
             # --- 3. qualité et texture ---
             Albu.OneOf([
@@ -62,19 +73,9 @@ class CardRecognitionDataset(Dataset):
                 Albu.RandomFog(fog_coef_lower=0.3, fog_coef_upper=0.5, alpha_coef=0.1, p=1),
             ], p=0.1),
 
-            # --- 7. regularization (trous) ---
-            Albu.CoarseDropout(
-                max_holes=8, 
-                max_height=32, 
-                max_width=32, 
-                min_holes=1, 
-                min_height=8, 
-                min_width=8, 
-                fill_value=0, 
-                p=0.5
-            ),
+           
 
-        ], bbox_params=Albu.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.3))
+        ], bbox_params=Albu.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.0))
         if len(directory) == 0:
             raise ValueError("Le dossier est vide !")
         
@@ -98,15 +99,15 @@ class CardRecognitionDataset(Dataset):
         self.reduction_factor = reduction_factor
         self.image_size_groups = {}
 
-        for idx in tqdm(range(100), desc="Traitement des labels", leave=True):
+        for idx in tqdm(range(N), desc="Traitement des labels", leave=True):
             file_name = file_names[idx]
             label = get_label(directory,file_name.replace(".jpg",".txt"),C)
             bounding_boxes = label.get_bounding_boxes()
             file_path = directory+"/images/"+file_name
             image_pil = PILImage.open(file_path).convert("RGB")
-            image_tensor = transforms.ToTensor()(image_pil)
-            target_size = (image_pil.size[0]//self.reduction_factor, image_pil.size[1]//self.reduction_factor)
-            image = CustomImage(image_tensor,bounding_boxes,target_size,self.reduction_factor,self.mean,self.std)
+            target_size = (int(image_pil.size[0]//self.reduction_factor -1)*self.reduction_factor,
+                            int(image_pil.size[1]//self.reduction_factor -1)*self.reduction_factor) # ajuste à la grille la plus proche en dessous
+            image = CustomImage(file_name=file_path,bounding_boxes=bounding_boxes,target_size=target_size,reduction_factor=self.reduction_factor)
             if target_size not in self.image_size_groups:
                 self.image_size_groups[target_size] = []
             self.image_size_groups[target_size].append(idx)
@@ -132,36 +133,60 @@ class CardRecognitionDataset(Dataset):
     def __len__(self):
         return self.length
 
-    def __getitem__(self, index) -> tuple[CustomImage,torch.Tensor]:
-
-        image:CustomImage = self.custom_images[index]
+    def transform_image(self,image:CustomImage)->torch.Tensor:
         image_tensor = image.get_raw_tensor()
         grid_division_x, grid_division_y = image.get_grid_division()
 
         image_np = np.transpose(image_tensor.numpy(), (1, 2, 0)) 
+        
         bb_boxes = image.get_bounding_boxes()
         grid_division_x, grid_division_y = image.get_grid_division()
-        label = torch.zeros(grid_division_x, grid_division_y, len(self.bboxes_ratio), 5 + self.n_classes)
+        label = torch.zeros(grid_division_y, grid_division_x, len(self.bboxes_ratio), 5 + self.n_classes)
         
         bb_boxes_yolo_format = []
         bb_boxes_classes = []
         for box in bb_boxes:
             coordinates = box.get_coordinate()
-            box_np = np.array([coordinates.x_center,coordinates.y_center,coordinates.width,coordinates.height])
-            bb_boxes_classes.append(box.class_id)
-            bb_boxes_yolo_format.append(box_np)
+            
+            # --- ÉTAPE 1 : Récupérer les valeurs brutes ---
+            xc, yc, w, h = coordinates.x_center, coordinates.y_center, coordinates.width, coordinates.height
+            
+            # --- ÉTAPE 2 : Convertir en coins pour gérer les dépassements ---
+            x1 = xc - w / 2
+            y1 = yc - h / 2
+            x2 = xc + w / 2
+            y2 = yc + h / 2
+            
+            # --- ÉTAPE 3 : "Clip" (Couper ce qui dépasse) ---
+            x1 = np.clip(x1, 0.0, 1.0)
+            y1 = np.clip(y1, 0.0, 1.0)
+            x2 = np.clip(x2, 0.0, 1.0)
+            y2 = np.clip(y2, 0.0, 1.0)
+            
+            # --- ÉTAPE 4 : Recalculer le format YOLO avec les valeurs corrigées ---
+            w_new = x2 - x1
+            h_new = y2 - y1
+            xc_new = x1 + w_new / 2
+            yc_new = y1 + h_new / 2
+            
+            # (Si une boîte était entièrement hors de l'image, w_new serait 0)
+            if w_new > 0 and h_new > 0:
+                box_np = np.array([xc_new, yc_new, w_new, h_new])
+                bb_boxes_classes.append(box.class_id)
+                bb_boxes_yolo_format.append(box_np)
+
         bb_boxes_yolo_format = np.array(bb_boxes_yolo_format)
+
+        
         
         augmented = self.transform(image=image_np, bboxes=bb_boxes_yolo_format, class_labels=bb_boxes_classes)
 
-        aug_image = image_tensor = transforms.ToTensor()(augmented['image'])
+        aug_image = image_tensor = transforms.ToTensor()(augmented['image']) # back to tensor [C,H,W]
         aug_boxes = augmented['bboxes']
-
-
         #reconstruit le tenseur [Objectness, x_center,y_center, width,height,c1,...,cn]
 
-        if len(aug_boxes) != len(bb_boxes):
-            print(len(aug_boxes),"/",len(bb_boxes))
+        '''if len(aug_boxes) != len(bb_boxes):
+            print(len(aug_boxes),"/",len(bb_boxes))'''
 
 
         boxes = []
@@ -172,20 +197,26 @@ class CardRecognitionDataset(Dataset):
             box = BoundingBox(True,x_center,y_center,width,height,box.class_id,box.num_classes)
             new_coordinates = box.get_cell_position(grid_division_x, grid_division_y)
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
+            #need to set objectness to 1 and class probabilities to one-hot encoding
+            label[new_coordinates[0],new_coordinates[1],anchor_index,0] = 1.0 # objectness
             label[new_coordinates[0],new_coordinates[1],anchor_index,1:5] = torch.tensor(aug_boxes[i])
+            label[new_coordinates[0],new_coordinates[1],anchor_index,5 + box.class_id] = 1.0 # class probability one-hot
             boxes.append(box)
 
+        '''new_image = CustomImage.from_tensor(image_tensor=aug_image,file_name=image.file_name,bounding_boxes=boxes,
+                                       target_size=image.target_size,reduction_factor=self.reduction_factor)'''
+        return aug_image,label
 
-        image = CustomImage(aug_image,boxes,image.target_size,self.reduction_factor,image.mean, image.std)
 
-        return image, label # retourne l'image custom et le tenseur label ( tuple[CustomImage,torch.Tensor] )
-    
+    def __getitem__(self, index) -> tuple[CustomImage,torch.Tensor]:
+        image:CustomImage = self.custom_images[index]
+        return self.transform_image(image)
+
 class CustomBatchSampler(Sampler):
     def __init__(self, dataset: CardRecognitionDataset, batch_size: int,groups:Optional[dict]=None):
         self.dataset = dataset
         self.batch_size = batch_size
         self.batches = []
-        self.indices = list(range(len(dataset)))
         cleaned_groups = {k: v for k, v in groups.items() if v}
         self.image_size_group = cleaned_groups
 
@@ -203,7 +234,6 @@ class CustomBatchSampler(Sampler):
             # Si pas assez d'images pour faire un batch complet ?
             # Option choisie : On complète avec des doublons (Data Augmentation fera le reste)
             count = len(indices)
-            print(f"Groupe taille {size} a {count} images.")
             if count < self.batch_size:
                 # On duplique les indices existants jusqu'à remplir le batch
                 # Ex: indices=[1], batch=4 -> [1, 1, 1, 1]
@@ -233,9 +263,8 @@ class CustomBatchSampler(Sampler):
     def __len__(self):
         return len(self.batches)
 
-def custom_collate_fn(batch):
-    custom_images = [item[0] for item in batch]
+def custom_collate_fn(batch) -> Tuple[List[CustomImage], torch.Tensor]:
+    images = torch.stack([item[0] for item in batch],dim=0)
     labels = torch.stack([item[1] for item in batch], dim=0)
-    images = torch.stack([img.get_raw_tensor() for img in custom_images])  # [B, C, H, W]
 
-    return custom_images, images, labels
+    return images, labels
