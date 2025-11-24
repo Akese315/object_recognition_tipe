@@ -27,7 +27,7 @@ class Coordinates:
 class BoundingBox:
     def __init__(
         self,
-        is_detected: bool,
+        objectness: float,
         x_center: float,
         y_center: float,
         width: float,
@@ -36,7 +36,7 @@ class BoundingBox:
         num_classes: int,
         class_id_prob: float = 1.0,
     ):
-        self.is_detected = bool(is_detected)
+        self.objectness = objectness
         self.x_center = x_center
         self.y_center = y_center
         self.width = width
@@ -59,9 +59,11 @@ class BoundingBox:
         i_cell = math.floor(self.y_center *grid_division_y) # ligne
         if self.x_center < 0.0 or self.x_center> 1.0:
             print("Warning: x_center or y_center > 1.0",self.x_center,self.y_center)
-            
-
         return (i_cell,j_cell)
+    
+    def get_objectness(self) -> float:
+        """Retourne la confiance d'objet (objectness)"""
+        return float(self.objectness)
     
     def get_coordinate(self) -> Coordinates:
         """Retourne un objet Coordinates avec les valeurs actuelles (après resize/padding)"""
@@ -97,7 +99,7 @@ class BoundingBox:
             ..."""
         
         return np.concatenate([
-            np.array([float(self.is_detected), self.x_center_cell, self.y_center_cell, self.width, self.height], dtype=np.float32),
+            np.array([float(self.objectness), self.x_center_cell, self.y_center_cell, self.width, self.height], dtype=np.float32),
             self.class_tensor
         ])
 
@@ -126,24 +128,24 @@ class BoundingBox:
             ..."""
         
         np_tensor = tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
-        is_detected = bool(np_tensor[0])
+        objectness = np_tensor[0]
 
         x_center_cell, y_center_cell, w, h = np_tensor[1:5]
         x_center = (j_cell + x_center_cell)/grid_division_x
         y_center = (i_cell + y_center_cell)/grid_division_y
         class_prob = np.max(np_tensor[5:5+num_classes])
         class_id = int(np.argmax(np_tensor[5:5+num_classes]))
-        return cls(is_detected,x_center,y_center, w, h, class_id, num_classes,class_prob)
+        return cls(objectness,x_center,y_center, w, h, class_id, num_classes,class_prob)
 
     @classmethod
     def from_file(cls,array:np.ndarray,num_classes:int)-> "BoundingBox":
         class_id = int(array[0])
         x, y, w, h = array[1:5]
-        is_detected = True
-        return cls(is_detected, x, y, w, h, class_id, num_classes)
+        objectness = 1.0
+        return cls(objectness, x, y, w, h, class_id, num_classes)
 
     def __repr__(self):
-        return f"Box(det={self.is_detected}, c=({self.x_center:.5f},{self.y_center:.5f}), size={self.width:.5f}x{self.height:.5f}, class={self.class_id})"
+        return f"Box(det={self.objectness}, c=({self.x_center:.5f},{self.y_center:.5f}), size={self.width:.5f}x{self.height:.5f}, class={self.class_id})"
 
 
 class Label:
@@ -152,6 +154,7 @@ class Label:
         self.bb_boxes = self.read_data(file_name)
 
     def read_data(self,file_name:str):
+
         boxes = []
         with open(file_name, "r") as f:
             for line in f:
@@ -278,12 +281,12 @@ class CustomImage:
         buf.seek(0)
         display(Image(data=buf.getvalue()))
 
-    def get_image(self, predicted_bb_boxes: list[BoundingBox] = None)->PILImage:
+    def get_image(self, predicted_bb_boxes: list[BoundingBox] = None, objectness_strict: bool = True)->PILImage:
         image_tensor = self.get_raw_tensor()
 
         img = (image_tensor.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8)
         img = np.ascontiguousarray(img)
-
+    
 
         # GT (bleu)
         for box in self._bb_boxes:
@@ -298,19 +301,35 @@ class CustomImage:
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
             cv2.putText(img, f"GT {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-        # Prédictions (vert)
         if predicted_bb_boxes is not None:
-            for box in predicted_bb_boxes:
-                cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+            if objectness_strict:
+                objectnesses = []
+                for box in predicted_bb_boxes:
+                    objectnesses.append(box.get_objectness())
+                max_objectness_index = np.argmax(np.array(objectnesses))
+                selected_box = predicted_bb_boxes[max_objectness_index]
+                cell_position = selected_box.get_cell_position(self.grid_division_x, self.grid_division_y)
+                coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
                 x1 = int(coordinates.x_center - coordinates.width / 2)
                 y1 = int(coordinates.y_center - coordinates.height / 2)
                 x2 = int(coordinates.x_center + coordinates.width / 2)
                 y2 = int(coordinates.y_center + coordinates.height / 2)
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img, f"Pred {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(img, f"Pred {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        image = PILImage.fromarray(img)
+        # Prédictions (vert)
+            else:
+                for box in predicted_bb_boxes:
+                    cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
+                    coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    x1 = int(coordinates.x_center - coordinates.width / 2)
+                    y1 = int(coordinates.y_center - coordinates.height / 2)
+                    x2 = int(coordinates.x_center + coordinates.width / 2)
+                    y2 = int(coordinates.y_center + coordinates.height / 2)
+                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(img, f"Pred {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            image = PILImage.fromarray(img)
         return image
     
     def get_grid_division(self) -> Tuple[int,int]:
