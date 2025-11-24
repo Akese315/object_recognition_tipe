@@ -101,7 +101,8 @@ class CardRecognitionDataset(Dataset):
 
         for idx in tqdm(range(N), desc="Traitement des labels", leave=True):
             file_name = file_names[idx]
-            label = get_label(directory,file_name.replace(".jpg",".txt"),C)
+            label_file_name = file_name.split(".")[0] + ".txt"
+            label = get_label(directory,label_file_name,C)
             bounding_boxes = label.get_bounding_boxes()
             file_path = directory+"/images/"+file_name
             image_pil = PILImage.open(file_path).convert("RGB")
