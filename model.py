@@ -13,13 +13,14 @@ class ConvBlock(nn.Module):
         return self.relu(self.bn(self.conv(x)))
     
 class YOLOHead(nn.Module):
-    def __init__(self, num_classes, num_anchors):
+    def __init__(self, num_classes, num_anchors,kernel_size):
         super(YOLOHead, self).__init__()   
         self.num_classes = num_classes
         self.num_anchors = num_anchors
+        self.kernel_size = kernel_size
         out_channels = num_anchors * (5 + num_classes)
 
-        self.detector = nn.Conv2d(128, out_channels, kernel_size=1)
+        self.detector = nn.Conv2d(self.kernel_size, out_channels, kernel_size=1)
 
     def forward(self, x):
         B, _, H, W = x.shape
@@ -69,7 +70,7 @@ class LightweightYOLO(nn.Module):
             in_channels = out_channels
             
         self.backbone = nn.Sequential(*layers)
-        self.head = YOLOHead(self.num_classes, self.num_anchors)
+        self.head = YOLOHead(self.num_classes, self.num_anchors, out_channels)
 
     def forward(self, x):
         H, W = x.shape[2], x.shape[3]
