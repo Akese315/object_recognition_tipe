@@ -303,19 +303,21 @@ class CustomImage:
 
         if predicted_bb_boxes is not None:
             if objectness_strict:
-                objectnesses = []
-                for box in predicted_bb_boxes:
-                    objectnesses.append(box.get_objectness())
-                max_objectness_index = np.argmax(np.array(objectnesses))
-                selected_box = predicted_bb_boxes[max_objectness_index]
-                cell_position = selected_box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
-                x1 = int(coordinates.x_center - coordinates.width / 2)
-                y1 = int(coordinates.y_center - coordinates.height / 2)
-                x2 = int(coordinates.x_center + coordinates.width / 2)
-                y2 = int(coordinates.y_center + coordinates.height / 2)
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img, f"Pred {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                selected_box = None
+                for cell in predicted_bb_boxes:
+                    objectnesses = []
+                    for box in cell:  
+                        objectnesses.append(box.get_objectness())
+                    max_objectness_index = np.argmax(np.array(objectnesses))
+                    selected_box = cell[max_objectness_index]
+                    cell_position = selected_box.get_cell_position(self.grid_division_x, self.grid_division_y)
+                    coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    x1 = int(coordinates.x_center - coordinates.width / 2)
+                    y1 = int(coordinates.y_center - coordinates.height / 2)
+                    x2 = int(coordinates.x_center + coordinates.width / 2)
+                    y2 = int(coordinates.y_center + coordinates.height / 2)
+                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(img, f"Pred {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Prédictions (vert)
             else:

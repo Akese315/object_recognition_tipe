@@ -103,8 +103,8 @@ def mean(tensor):
     return torch.mean(flatten_tensor)
 
 
-def find_objects(tensor):
-    mask = tensor[...,0] ==1
+def find_objects(tensor, threshold=1.0):
+    mask = tensor[...,0] >=threshold
     coordinates = torch.nonzero(mask, as_tuple=False)
     return coordinates  
 

@@ -42,8 +42,9 @@ class YOLOHead(nn.Module):
         by = torch.sigmoid(ty) 
         bw = torch.sigmoid(tw) 
         bh = torch.sigmoid(th) 
-        obj_score = torch.sigmoid(tobj)
-        cls_prob = torch.sigmoid(tcls)
+
+        obj_score = tobj
+        cls_prob = tcls
 
         # Concat final [objectness, bx, by, bw, bh, class_probs]
         pred_boxes = torch.stack([obj_score, bx, by, bw, bh], dim=-1)
@@ -85,6 +86,21 @@ class LightweightYOLO(nn.Module):
         features = self.backbone(x)
         return self.head(features)
     
+    def predict(self, x):
+         
+        tobj = x[..., 0]
+        tx = x[..., 1]
+        ty = x[..., 2]
+        tw = x[..., 3]
+        th = x[..., 4]
+        tcls = x[..., 5:]
+        obj_score = torch.sigmoid(tobj)
+        cls_prob = torch.sigmoid(tcls)
+
+        pred_boxes = torch.stack([obj_score, tx, ty, tw, th], dim=-1)
+        pred_final = torch.cat([pred_boxes, cls_prob], dim=-1)
+        return pred_final  # [B, H, W, A, 5+C]
+    
     def get_reduction_factor(self):
         return self.reduction_factor
 
@@ -92,7 +108,7 @@ class YoloLoss(nn.Module):
     def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0):
         super().__init__()
         self.mse = nn.MSELoss(reduction='sum')
-        self.bce = nn.BCELoss(reduction='sum') # Changé en sum pour être cohérent avec MSE
+        self.bce = nn.BCEWithLogitsLoss(reduction='sum') # Changé en sum pour être cohérent avec MSE
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
@@ -117,12 +133,15 @@ class YoloLoss(nn.Module):
         if preds.size(-1) > 5:
             loss_class = self.bce(preds[..., 5:][obj_mask], targets[..., 5:][obj_mask])
 
-        batch_size = preds.size(0)
+        # On divise par le nombre d'objets réels dans le batch, pas la taille du batch.
+        # On ajoute 1e-6 pour éviter la division par zéro si batch vide.
+        num_objects = obj_mask.sum().float() + 1e-6
+
         total = (
             self.lambda_coord * loss_coord +
             self.lambda_obj * loss_obj +
             self.lambda_noobj * loss_noobj +
             loss_class
-        ) / batch_size
+        ) / num_objects
 
         return total

@@ -15,7 +15,7 @@ from torch.utils.data import Sampler
 import random
 
 class CardRecognitionDataset(Dataset):
-    def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[]):  
+    def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[], max_width =800, max_height=800):  
         self.mean = [0.485, 0.456, 0.406] # mean ImageNet values
         self.std = [0.229, 0.224, 0.225] # standard ImageNet values
 
@@ -98,6 +98,8 @@ class CardRecognitionDataset(Dataset):
         self.bboxes_ratio = bounding_boxes_ratio
         self.reduction_factor = reduction_factor
         self.image_size_groups = {}
+        self.max_width = max_width
+        self.max_height = max_height
 
         for idx in tqdm(range(N), desc="Traitement des labels", leave=True):
             file_name = file_names[idx]
@@ -107,7 +109,12 @@ class CardRecognitionDataset(Dataset):
             file_path = directory+"/images/"+file_name
             image_pil = PILImage.open(file_path).convert("RGB")
             target_size = (int(image_pil.size[0]//self.reduction_factor -1)*self.reduction_factor,
-                            int(image_pil.size[1]//self.reduction_factor -1)*self.reduction_factor) # ajuste à la grille la plus proche en dessous
+                            int(image_pil.size[1]//self.reduction_factor -1)*self.reduction_factor)
+             # ajuste à la grille la plus proche en dessous
+            if image_pil.size[0] > self.max_width or image_pil.size[1] > self.max_height:
+                target_size = (int(self.max_width//self.reduction_factor -1)*self.reduction_factor,
+                            int(self.max_height//self.reduction_factor -1)*self.reduction_factor)
+            #si la taille est supérieure à la max_width ou max_height autorisé, alors on set la target size à la max_size
             image = CustomImage(file_name=file_path,bounding_boxes=bounding_boxes,target_size=target_size,reduction_factor=self.reduction_factor)
             if target_size not in self.image_size_groups:
                 self.image_size_groups[target_size] = []

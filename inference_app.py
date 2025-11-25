@@ -7,16 +7,21 @@ from YOLO_loader import BoundingBox
 from model import LightweightYOLO
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'model/version10.pth'
+MODEL_PATH = 'model/faceV4.pth'
 IMG_SIZE = 416
 N_CELL = 52
 N_ANCHORS = 3
-N_CLASS = 1
+
 CONF_THRESHOLD = 0.2
 CLASS_THESHOLD = 0.2
 IOU_THRESHOLD = 0.4
 
-CLASSES = ['card', 'face']
+CLASSES = ["card",
+"face",
+"screen"
+]
+
+N_CLASS = len(CLASSES)
 COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen
 
 
@@ -29,7 +34,7 @@ transform = transforms.Compose([
 
 # ================= CHARGEMENT MODÈLE =================
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = LightweightYOLO(num_classes=N_CLASS, num_anchors=N_ANCHORS, conv_layer=3, divider=1)
+model = LightweightYOLO(num_classes=N_CLASS, num_anchors=N_ANCHORS, base_kernel_num =16,conv_layer=3, divider=1)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.to(device)
 model.eval()
@@ -58,23 +63,23 @@ while True:
 
     with torch.no_grad():
         output = model(input_tensor)  # [B, H, W, A, 5+C]
-
+        output = model.predict(output)
         
 
         # Parcourir la grille et les ancres pour récupérer toutes les prédictions
         B,H, W, A, S = output.shape
+        print("Output shape:", output)
         pred_boxes = []
         for i in range(H):
             for j in range(W):
                 for a in range(A):
                     pred = output[0, i, j, a]
-                    
+                    print("Output shape:", pred)
                     if pred[0].item() > CONF_THRESHOLD:
                         # Construire un objet BoundingBox depuis le tenseur
                         box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j,  W, H)
-                        if box.class_id_prob >= CLASS_THESHOLD:
-                          # Limiter le nombre de boîtes pour éviter les débordements
-                            pred_boxes.append(box)
+                        
+                        pred_boxes.append(box)
         
         # Appliquer la suppression non maximale
 
