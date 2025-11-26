@@ -105,16 +105,20 @@ class LightweightYOLO(nn.Module):
         return self.reduction_factor
 
 class YoloLoss(nn.Module):
-    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0):
+    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0):
         super().__init__()
         self.mse = nn.MSELoss(reduction='sum')
         self.bce = nn.BCEWithLogitsLoss(reduction='sum') # Changé en sum pour être cohérent avec MSE
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
+        self.smooth_factor = smooth_factor
 
     def forward(self, preds, targets):
         # preds, targets = [B, H, W, A, 5+C]
+
+        B,H, W, A, S = preds.shape
+        n_class = S - 5 # Nombre de classes 5 est pour (obj, x, y, w, h)
         
         obj_mask = targets[..., 0] == 1 
         noobj_mask = targets[..., 0] == 0
@@ -123,15 +127,28 @@ class YoloLoss(nn.Module):
         # Attention: s'assurer que targets contient les valeurs relatives à la cellule (0-1)
         loss_coord = self.mse(preds[..., 1:3][obj_mask], targets[..., 1:3][obj_mask]) \
                    + self.mse(preds[..., 3:5][obj_mask], targets[..., 3:5][obj_mask])
+        
+
+
+        class_smooth = 1-self.smooth_factor
+
+        if n_class > 1:
+            no_class_smooth = self.smooth_factor/(n_class-1)
+        else:
+            no_class_smooth = 0
 
         # 2. Loss Objectness
         loss_obj = self.bce(preds[..., 0][obj_mask], targets[..., 0][obj_mask])
         loss_noobj = self.bce(preds[..., 0][noobj_mask], targets[..., 0][noobj_mask])
-
+        
         # 3. Loss Classes
         loss_class = 0.0
         if preds.size(-1) > 5:
-            loss_class = self.bce(preds[..., 5:][obj_mask], targets[..., 5:][obj_mask])
+            t_class =  targets[..., 5:][obj_mask]
+
+            t_class_smoothed = t_class =  targets[..., 5:][obj_mask] * class_smooth + (1-t_class)*no_class_smooth
+
+            loss_class = self.bce(preds[..., 5:][obj_mask], t_class_smoothed)
 
         # On divise par le nombre d'objets réels dans le batch, pas la taille du batch.
         # On ajoute 1e-6 pour éviter la division par zéro si batch vide.
