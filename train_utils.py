@@ -168,7 +168,7 @@ class TrainSettings:
         else:
             rf = self.reduction_factor
 
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S")
         folder_name = f"cnn_yolo-light_reduc{rf}-v1_fp32_{date_str}"
         
         self.model_dir = os.path.join(base_dir, folder_name)
@@ -212,6 +212,10 @@ class TrainSettings:
             f.write("\n## Training Components\n")
             if self.loss_fn:
                 f.write(f"- **Loss Function**: {self.loss_fn}\n")
+                f.write(f"- **Lambda Coord**: {self.lambda_coord}\n")
+                f.write(f"- **Lambda Noobj**: {self.lambda_noobj}\n")
+                f.write(f"- **Lambda Obj**: {self.lambda_obj}\n")
+                f.write(f"- **Smooth Factor**: {self.smooth_factor}\n")
             else:
                 f.write("- **Loss Function**: None\n")
                 
