@@ -136,11 +136,12 @@ def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
             plot_idx += 1
             
     plt.tight_layout()
-    if show:
-        plt.show()
     buf = io.BytesIO()
+    plt.savefig(buf, format='png')
     buf.seek(0)
-    img = Image.open(buf) 
+    img = Image.open(buf)
+    if show:
+        plt.show() 
     return img
 
 
@@ -170,10 +171,10 @@ class TrainSettings:
         date_str = datetime.datetime.now().strftime("%Y-%m-%d")
         folder_name = f"cnn_yolo-light_reduc{rf}-v1_fp32_{date_str}"
         
-        experiment_dir = os.path.join(base_dir, folder_name)
+        self.model_dir = os.path.join(base_dir, folder_name)
         
         # Handle duplicate folder names by appending a counter
-        if os.path.exists(experiment_dir):
+        if os.path.exists(self.model_dir):
             counter = 1
             while True:
                 new_name = f"{folder_name}_{counter}"
@@ -183,16 +184,16 @@ class TrainSettings:
                     break
                 counter += 1
                 
-        os.makedirs(experiment_dir, exist_ok=True)
+        os.makedirs(self.model_dir, exist_ok=True)
 
         # Save model weights
-        model_save_path = os.path.join(experiment_dir, "model.pth")
+        model_save_path = os.path.join(self.model_dir, "model.pth")
         torch.save(model.state_dict(), model_save_path)
 
-        summary_path = os.path.join(experiment_dir, "summary.md")
+        summary_path = os.path.join(self.model_dir, "summary.md")
         
         with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(f"# Experiment Summary - {os.path.basename(experiment_dir)}\n\n")
+            f.write(f"# Experiment Summary - {os.path.basename(self.model_dir)}\n\n")
             
             f.write("## Model Architecture\n")
             f.write("```\n")
@@ -223,13 +224,10 @@ class TrainSettings:
                 f.write(f"- **Scheduler**: {self.scheduler}\n")
             else:
                 f.write("- **Scheduler**: None\n")
-        
-        return experiment_dir
 
     def add_loss_history(self, model:Optional[nn.Module] = None):
         if model is None:
             raise ValueError("Model must be provided")
-        if not hasattr(model, 'loss_history'):
-            model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
-            image = get_plot_loss(model=model)
-            image.save(os.path.join(self.experiment_dir, "loss_history.png"))
+        
+        image = get_plot_loss(model=model)
+        image.save(os.path.join(self.model_dir, "loss_history.png"))
