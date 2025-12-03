@@ -11,6 +11,8 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
+import io
+from PIL import Image
 
 def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, device, N_CLASS, reduction_factor, centers,N_ANCHORS, train=True,show=False):
     model.train(train)
@@ -96,43 +98,50 @@ def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, devic
 
     epoch_loss = running_loss / len(loader)
     epoch_components = {k: v / len(loader) for k, v in running_components.items()}
-
-    # Plotting
     if train:
         if not hasattr(model, 'loss_history'):
-            model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}
-        
+            model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
         model.loss_history["total"].append(epoch_loss)
         for k, v in epoch_components.items():
             if k in model.loss_history:
                 model.loss_history[k].append(v)
-        
-        clear_output(wait=True)
-        plt.figure(figsize=(12, 8))
-        
-        # Total Loss
-        plt.subplot(2, 3, 1)
-        plt.plot(model.loss_history["total"], label="Total Loss")
-        plt.title("Total Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        
-        # Component Losses
-        plot_idx = 2
-        for k in ["coord", "obj", "noobj", "class"]:
-            if k in model.loss_history:
-                plt.subplot(2, 3, plot_idx)
-                plt.plot(model.loss_history[k], label=f"{k} Loss", color=f"C{plot_idx}")
-                plt.title(f"{k} Loss")
-                plt.xlabel("Epoch")
-                plt.legend()
-                plot_idx += 1
-                
-        plt.tight_layout()
-        plt.show()
 
     return epoch_loss
+
+
+def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
+    if not hasattr(model, 'loss_history'):
+        model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
+    
+    clear_output(wait=True)
+    plt.figure(figsize=(12, 8))
+    
+    # Total Loss
+    plt.subplot(2, 3, 1)
+    plt.plot(model.loss_history["total"], label="Total Loss")
+    plt.title("Total Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    
+    # Component Losses
+    plot_idx = 2
+    for k in ["coord", "obj", "noobj", "class"]:
+        if k in model.loss_history:
+            plt.subplot(2, 3, plot_idx)
+            plt.plot(model.loss_history[k], label=f"{k} Loss", color=f"C{plot_idx}")
+            plt.title(f"{k} Loss")
+            plt.xlabel("Epoch")
+            plt.legend()
+            plot_idx += 1
+            
+    plt.tight_layout()
+    if show:
+        plt.show()
+    buf = io.BytesIO()
+    buf.seek(0)
+    img = Image.open(buf) 
+    return img
 
 
 class TrainSettings:
@@ -216,3 +225,11 @@ class TrainSettings:
                 f.write("- **Scheduler**: None\n")
         
         return experiment_dir
+
+    def add_loss_history(self, model:Optional[nn.Module] = None):
+        if model is None:
+            raise ValueError("Model must be provided")
+        if not hasattr(model, 'loss_history'):
+            model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
+            image = get_plot_loss(model=model)
+            image.save(os.path.join(self.experiment_dir, "loss_history.png"))
