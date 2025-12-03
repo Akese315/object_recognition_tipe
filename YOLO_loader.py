@@ -49,10 +49,9 @@ class BoundingBox:
         self.y_center_cell = 0
 
 
-
         # One-hot
         self.class_tensor = np.zeros(num_classes, dtype=np.float32)
-        self.class_tensor[class_id] = 1.0
+        self.class_tensor[class_id] = class_id_prob
 
     def get_cell_position(self, grid_division_x:int, grid_division_y:int):
         j_cell = math.floor(self.x_center * grid_division_x)  # colonne
@@ -97,7 +96,6 @@ class BoundingBox:
             0x05: class0\n
             0x06: class1\n
             ..."""
-        
         return np.concatenate([
             np.array([float(self.objectness), self.x_center_cell, self.y_center_cell, self.width, self.height], dtype=np.float32),
             self.class_tensor
@@ -133,6 +131,7 @@ class BoundingBox:
         x_center_cell, y_center_cell, w, h = np_tensor[1:5]
         x_center = (j_cell + x_center_cell)/grid_division_x
         y_center = (i_cell + y_center_cell)/grid_division_y
+        
         class_prob = np.max(np_tensor[5:5+num_classes])
         class_id = int(np.argmax(np_tensor[5:5+num_classes]))
         return cls(objectness,x_center,y_center, w, h, class_id, num_classes,class_prob)
@@ -297,9 +296,11 @@ class CustomImage:
             x2 = int(coordinates.x_center + coordinates.width / 2)
             y2 = int(coordinates.y_center + coordinates.height / 2)
 
-
+            objectness = box.get_objectness()
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(img, f"GT {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+            cv2.putText(img, f"{objectness:.2f} {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
 
         if predicted_bb_boxes is not None:
             if objectness_strict:
@@ -317,9 +318,8 @@ class CustomImage:
                     x2 = int(coordinates.x_center + coordinates.width / 2)
                     y2 = int(coordinates.y_center + coordinates.height / 2)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(img, f"Pred {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        # Prédictions (vert)
+                    cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+                    cv2.putText(img, f"{selected_box.get_objectness():.2f} {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             else:
                 for box in predicted_bb_boxes:
                     cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
@@ -329,8 +329,9 @@ class CustomImage:
                     x2 = int(coordinates.x_center + coordinates.width / 2)
                     y2 = int(coordinates.y_center + coordinates.height / 2)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(img, f"Pred {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
+                    cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+                    cv2.putText(img, f"{box.get_objectness():.2f} {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
             image = PILImage.fromarray(img)
         return image
     

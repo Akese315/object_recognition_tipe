@@ -3,22 +3,19 @@ import torch
 import numpy as np
 from PIL import Image
 from torchvision import transforms
-from YOLO_loader import BoundingBox
+from YOLO_loader import BoundingBox, CustomImage
 from model import LightweightYOLO
+from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'model/faceV4.pth'
-IMG_SIZE = 416
-N_CELL = 52
-N_ANCHORS = 3
+MODEL_PATH = 'models/ballV4.pth'
+N_ANCHORS = 1
 
 CONF_THRESHOLD = 0.2
 CLASS_THESHOLD = 0.2
 IOU_THRESHOLD = 0.4
 
-CLASSES = ["card",
-"face",
-"screen"
+CLASSES = ["ball"
 ]
 
 N_CLASS = len(CLASSES)
@@ -27,21 +24,23 @@ COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen
 
 # Transformations
 transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    
+    transforms.ToTensor()
 ])
 
+print("Configuration terminée.")
 # ================= CHARGEMENT MODÈLE =================
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = LightweightYOLO(num_classes=N_CLASS, num_anchors=N_ANCHORS, base_kernel_num =16,conv_layer=3, divider=1)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+model = LightweightYOLO(num_classes=N_CLASS, num_anchors=N_ANCHORS, base_kernel_num=16, conv_layer=3, divider=1)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=False))
 model.to(device)
 model.eval()
 
 
 # ================= BOUCLE WEBCAM =================
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 720)
 if not cap.isOpened():
     print("Erreur : Impossible d'ouvrir la caméra.")
     exit()
@@ -58,55 +57,45 @@ while True:
 
     # Préparation
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(frame_rgb)
-    input_tensor = transform(pil_img).unsqueeze(0).to(device)
+    raw_tensor = transforms.ToTensor()(Image.fromarray(frame_rgb))
 
-    with torch.no_grad():
-        output = model(input_tensor)  # [B, H, W, A, 5+C]
+    
+    inference_image = CustomImage.from_tensor(
+        image_tensor=raw_tensor,
+        target_size=(720,720),
+        reduction_factor=reduction,
+        bounding_boxes=[] # Pas de vérité terrain en inférence
+    )
+    input_tensor = inference_image.get_raw_tensor().unsqueeze(0).to(device)
+    with torch.no_grad():        
+        output = model(input_tensor)
         output = model.predict(output)
+        #print(f"Output stats: min={output.min().item():.4f}, max={output.max().item():.4f}, mean={output.mean().item():.4f}")
         
-
-        # Parcourir la grille et les ancres pour récupérer toutes les prédictions
-        B,H, W, A, S = output.shape
-        print("Output shape:", output)
+        B, H, W, A, S = output.shape
         pred_boxes = []
+        
         for i in range(H):
             for j in range(W):
                 for a in range(A):
                     pred = output[0, i, j, a]
-                    print("Output shape:", pred)
                     if pred[0].item() > CONF_THRESHOLD:
-                        # Construire un objet BoundingBox depuis le tenseur
-                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j,  W, H)
-                        
+                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j, W, H)
                         pred_boxes.append(box)
+                        
+
+        print(f"Détections brutes : {len(pred_boxes)}")
         
-        # Appliquer la suppression non maximale
+        res_pil = inference_image.get_image(predicted_bb_boxes=pred_boxes, objectness_strict=False)
+        
+        # Convertir en format OpenCV pour l'afficher (RGB -> BGR)
+        res_np = np.array(res_pil)
+        res_bgr = cv2.cvtColor(res_np, cv2.COLOR_RGB2BGR)
 
-        print("Nombre de boîtes avant NMS :", len(pred_boxes))
-        # Dessiner toutes les bounding boxes retrouvées
-        for box in pred_boxes:
+        cv2.imshow('YOLO Real-time Detection', res_bgr)
 
-            i_cell, j_cell = box.get_cell_position(int(W//reduction), int(H//reduction))
-            den = box.get_denormalized_tensor((orig_w, orig_h), i_cell, j_cell,  int(W//reduction), int(H//reduction))
-            # den: [obj, x_center, y_center, width, height, ...]
-            x_center = den[1]
-            y_center = den[2]
-            w_box = den[3]
-            h_box = den[4]
-
-            x1 = int(x_center - w_box / 2)
-            y1 = int(y_center - h_box / 2)
-            x2 = int(x_center + w_box / 2)
-            y2 = int(y_center + h_box / 2)
-
-            label = CLASSES[box.class_id] if box.class_id < len(CLASSES) else str(box.class_id)
-            color = COLORS[box.class_id] if box.class_id < len(COLORS) else (0, 255, 0)
-
-            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(display_frame, f"{label} {box.class_id_prob:.2f}", (x1, max(0, y1 - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-    cv2.imshow('YOLO Real-time Detection', display_frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+cap.release()
+cv2.destroyAllWindows()

@@ -81,7 +81,7 @@ class LightweightYOLO(nn.Module):
             new_H = (H // self.reduction_factor + 1) * self.reduction_factor
             new_W = (W // self.reduction_factor + 1) * self.reduction_factor
             # On évite le print ici pour ne pas spammer les logs
-            x = nn.functional.interpolate(x, size=(new_H, new_W), mode='bilinear', align_corners=False)
+            #x = nn.functional.interpolate(x, size=(new_H, new_W), mode='bilinear', align_corners=False)
 
         features = self.backbone(x)
         return self.head(features)
@@ -99,20 +99,21 @@ class LightweightYOLO(nn.Module):
 
         pred_boxes = torch.stack([obj_score, tx, ty, tw, th], dim=-1)
         pred_final = torch.cat([pred_boxes, cls_prob], dim=-1)
-        return pred_final  # [B, H, W, A, 5+C]
-    
+        return pred_final
+
     def get_reduction_factor(self):
         return self.reduction_factor
+        # self.smooth_factor = smooth_factor # Removed broken line
 
 class YoloLoss(nn.Module):
-    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0):
-        super().__init__()
-        self.mse = nn.MSELoss(reduction='sum')
-        self.bce = nn.BCEWithLogitsLoss(reduction='sum') # Changé en sum pour être cohérent avec MSE
+    def __init__(self, lambda_coord=5.0, lambda_noobj=0.1, lambda_obj=1.0, smooth_factor=0):
+        super(YoloLoss, self).__init__()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
         self.smooth_factor = smooth_factor
+        self.mse = nn.MSELoss(reduction='sum')
+        self.bce = nn.BCEWithLogitsLoss(reduction='sum')
 
     def forward(self, preds, targets):
         # preds, targets = [B, H, W, A, 5+C]
@@ -128,7 +129,6 @@ class YoloLoss(nn.Module):
         loss_coord = self.mse(preds[..., 1:3][obj_mask], targets[..., 1:3][obj_mask]) \
                    + self.mse(preds[..., 3:5][obj_mask], targets[..., 3:5][obj_mask])
         
-
 
         class_smooth = 1-self.smooth_factor
 
@@ -146,7 +146,7 @@ class YoloLoss(nn.Module):
         if preds.size(-1) > 5:
             t_class =  targets[..., 5:][obj_mask]
 
-            t_class_smoothed = t_class =  targets[..., 5:][obj_mask] * class_smooth + (1-t_class)*no_class_smooth
+            t_class_smoothed  =  targets[..., 5:][obj_mask] * class_smooth + (1-t_class)*no_class_smooth
 
             loss_class = self.bce(preds[..., 5:][obj_mask], t_class_smoothed)
 
@@ -161,4 +161,9 @@ class YoloLoss(nn.Module):
             loss_class
         ) / num_objects
 
-        return total
+        return total, {
+            "coord": loss_coord,
+            "obj": loss_obj,
+            "noobj": loss_noobj,
+            "class": loss_class
+        }
