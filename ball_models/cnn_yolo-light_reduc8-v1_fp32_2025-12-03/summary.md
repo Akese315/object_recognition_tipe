@@ -31,7 +31,7 @@ LightweightYOLO(
 
 ## Hyperparameters
 - **Num Classes**: 1
-- **Num Epochs**: 5
+- **Num Epochs**: 20
 - **Batch Size**: 16
 - **Learning Rate**: (See Optimizer details)
 - **Reduction Factor**: 1
@@ -57,4 +57,4 @@ Parameter Group 0
     maximize: False
     weight_decay: 0
 )
-- **Scheduler**: <torch.optim.lr_scheduler.ReduceLROnPlateau object at 0x00000138AEDA4590>
+- **Scheduler**: <torch.optim.lr_scheduler.ReduceLROnPlateau object at 0x00000229D1984590>
