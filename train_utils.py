@@ -229,6 +229,19 @@ class TrainSettings:
             else:
                 f.write("- **Scheduler**: None\n")
 
+            loss_history = model.loss_history
+            last_loss = loss_history["total"][-1]
+            f.write(f"- **Last Loss**: {last_loss}\n")
+            last_coord = loss_history["coord"][-1]
+            f.write(f"- **Last Coord**: {last_coord}\n")
+            last_obj = loss_history["obj"][-1]
+            f.write(f"- **Last Obj**: {last_obj}\n")
+            last_noobj = loss_history["noobj"][-1]
+            f.write(f"- **Last Noobj**: {last_noobj}\n")
+            last_class = loss_history["class"][-1]
+            f.write(f"- **Last Class**: {last_class}\n")
+
+
     def add_loss_history(self, model:Optional[nn.Module] = None):
         if model is None:
             raise ValueError("Model must be provided")
