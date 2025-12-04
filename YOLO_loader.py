@@ -207,16 +207,19 @@ class CustomImage:
         return image_tensor
 
     def _apply_letterbox(self,image_tensor):
-        
 
-        image_tensor = self.resize_image(self.target_size,image_tensor=image_tensor)
-        if image_tensor is None:
-            raise Exception("Image_tensor is none after resize : file_name :",self)
-        
         for box in self._bb_boxes:
             coordinates = box.get_cell_position(self.grid_division_x, self.grid_division_y)
             box.x_center_cell = (box.x_center*self.grid_division_x) - coordinates[1]
             box.y_center_cell = (box.y_center*self.grid_division_y) - coordinates[0]
+        
+        W,H = image_tensor.size(2),image_tensor.size(1)
+        if (W,H) == self.target_size:
+            return image_tensor
+
+        image_tensor = self.resize_image(self.target_size,image_tensor=image_tensor)
+        if image_tensor is None:
+            raise Exception("Image_tensor is none after resize : file_name :",self)
         
         return image_tensor
 
@@ -383,7 +386,7 @@ class CustomImage:
         # Le tenseur est en [C, H, W]. On utilise [2] pour W et [1] pour H.
         image._original_size = (image_tensor.size(2), image_tensor.size(1)) 
         # 3. Appliquer le prétraitement (redimensionnement et padding) au tenseur préchargé
-        image._apply_letterbox(image_tensor) 
+        image._image_tensor = image._apply_letterbox(image_tensor) 
         
         return image
 

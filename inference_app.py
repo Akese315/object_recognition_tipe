@@ -8,10 +8,10 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'models/ballV4.pth'
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-04 08-59-25/model.pth'
 N_ANCHORS = 1
 
-CONF_THRESHOLD = 0.2
+CONF_THRESHOLD = 0.4
 CLASS_THESHOLD = 0.2
 IOU_THRESHOLD = 0.4
 
@@ -39,8 +39,8 @@ model.eval()
 
 # ================= BOUCLE WEBCAM =================
 cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 720)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 if not cap.isOpened():
     print("Erreur : Impossible d'ouvrir la caméra.")
     exit()
@@ -62,7 +62,7 @@ while True:
     
     inference_image = CustomImage.from_tensor(
         image_tensor=raw_tensor,
-        target_size=(720,720),
+        target_size=(640,480),
         reduction_factor=reduction,
         bounding_boxes=[] # Pas de vérité terrain en inférence
     )
