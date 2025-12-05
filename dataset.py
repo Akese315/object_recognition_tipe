@@ -13,9 +13,19 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from torch.utils.data import Sampler
 import random
+import time
 
 class CardRecognitionDataset(Dataset):
-    def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[], max_width =800, max_height=800):  
+    def __init__(self, directory, is_dark_and_white=False,reduction_factor=8, bounding_boxes_ratio =[], max_width =800, max_height=800, preload_images=False):
+        """
+        :directory: The path to the directory containing the dataset.
+        :is_dark_and_white: A boolean indicating whether to convert images to grayscale.
+        :reduction_factor: Factor by which to reduce image dimensions.
+        :bounding_boxes_ratio: List of ratios to filter bounding boxes.
+        :max_width: Maximum width for image resizing.
+        :max_height: Maximum height for image resizing.
+        :preload_images: A boolean indicating whether to preload all images into memory.
+        """
         self.mean = [0.485, 0.456, 0.406] # mean ImageNet values
         self.std = [0.229, 0.224, 0.225] # standard ImageNet values
 
@@ -100,6 +110,7 @@ class CardRecognitionDataset(Dataset):
         self.image_size_groups = {}
         self.max_width = max_width
         self.max_height = max_height
+        self.preload_images = preload_images
 
         for idx in tqdm(range(N), desc="Traitement des labels", leave=True):
             file_name = file_names[idx]
@@ -107,20 +118,16 @@ class CardRecognitionDataset(Dataset):
             label = get_label(directory,label_file_name,C)
             bounding_boxes = label.get_bounding_boxes()
             file_path = directory+"/images/"+file_name
-            image_pil = PILImage.open(file_path).convert("RGB")
-            target_size = (int(image_pil.size[0]//self.reduction_factor -1)*self.reduction_factor,
-                            int(image_pil.size[1]//self.reduction_factor -1)*self.reduction_factor)
-             # ajuste à la grille la plus proche en dessous
-            if image_pil.size[0] > self.max_width or image_pil.size[1] > self.max_height:
-                target_size = (int(self.max_width//self.reduction_factor -1)*self.reduction_factor,
-                            int(self.max_height//self.reduction_factor -1)*self.reduction_factor)
+            
             #si la taille est supérieure à la max_width ou max_height autorisé, alors on set la target size à la max_size
-            image = CustomImage(file_name=file_path,bounding_boxes=bounding_boxes,target_size=target_size,reduction_factor=self.reduction_factor)
+            image = CustomImage(file_name=file_path,bounding_boxes=bounding_boxes,max_size=(max_width,max_height),reduction_factor=self.reduction_factor,cache_image=preload_images)
+            if preload_images:
+                image.load_image()
+            self.custom_images.append(image)
+            target_size = image.get_resized_size()
             if target_size not in self.image_size_groups:
                 self.image_size_groups[target_size] = []
             self.image_size_groups[target_size].append(idx)
-            self.custom_images.append(image)
-       
      
 
         print(f"Mean: {self.mean}")
@@ -142,7 +149,10 @@ class CardRecognitionDataset(Dataset):
         return self.length
 
     def transform_image(self,image:CustomImage)->torch.Tensor:
+        time_start = time.time()
         image_tensor = image.get_raw_tensor()
+        time_end = time.time()
+        #print(f"Time to get raw tensor: {time_end - time_start}")
         grid_division_x, grid_division_y = image.get_grid_division()
 
         image_np = np.transpose(image_tensor.numpy(), (1, 2, 0)) 
@@ -214,13 +224,13 @@ class CardRecognitionDataset(Dataset):
             boxes.append(box)
 
             new_image = CustomImage.from_tensor(image_tensor=aug_image,file_name=image.file_name,bounding_boxes=boxes,
-                                       target_size=image.target_size,reduction_factor=self.reduction_factor)
+                                       target_size=image.resized_size,reduction_factor=self.reduction_factor)
             new_image.get_bounding_boxes()
         return aug_image,label
 
 
     def __getitem__(self, index) -> tuple[CustomImage,torch.Tensor]:
-        image:CustomImage = self.custom_images[index]
+        image:CustomImage = self.custom_images[index]       
         return self.transform_image(image)
 
 class CustomBatchSampler(Sampler):

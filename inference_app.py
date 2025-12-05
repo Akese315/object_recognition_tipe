@@ -8,14 +8,14 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-04 08-59-25/model.pth'
-N_ANCHORS = 1
+MODEL_PATH = 'first_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-05 10-21-59/model.pth'
+N_ANCHORS = 3
 
-CONF_THRESHOLD = 0.4
-CLASS_THESHOLD = 0.2
+CONF_THRESHOLD = 0.50
+CLASS_THESHOLD = 0.8
 IOU_THRESHOLD = 0.4
 
-CLASSES = ["ball"
+CLASSES = ["face","card","screen"
 ]
 
 N_CLASS = len(CLASSES)

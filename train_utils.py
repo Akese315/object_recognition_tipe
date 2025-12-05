@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import io
 from PIL import Image
+import time
 
 def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, device, N_CLASS, reduction_factor, centers,N_ANCHORS, train=True,show=False):
     model.train(train)
@@ -20,8 +21,10 @@ def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, devic
     running_loss = 0.0
     running_components = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0}
     preds, targets = [], []
-
+    start_time = time.time()
     for images, labels in tqdm(loader,desc="batch : ",leave=True):
+        time_end = time.time()
+        #print(f"Batch preparation time : {time_end - start_time}")
         inputs = images.to(device, dtype=torch.float32)
         labels = labels.to(device, dtype=torch.float32)
 
@@ -95,6 +98,8 @@ def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, devic
         if not train:
             preds.append(outputs.detach().cpu())
             targets.append(labels.detach().cpu())
+
+        start_time = time.time()
 
     epoch_loss = running_loss / len(loader)
     epoch_components = {k: v / len(loader) for k, v in running_components.items()}

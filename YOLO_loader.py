@@ -169,20 +169,31 @@ class CustomImage:
         self,
         file_name: str,
         bounding_boxes: list[BoundingBox],
-        target_size: Tuple[int, int] = (500, 500),
+        max_size: Tuple[int, int] = None,
         reduction_factor: int = 8,
+        cache_image: bool = False,
         ):
 
-        self.target_size = target_size
+        self.max_size = max_size
+        self._original_size = (0, 0)
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
         self.reduction_factor = reduction_factor
-        self.grid_division_x = target_size[0] // reduction_factor
-        self.grid_division_y = target_size[1] // reduction_factor
         self.file_name = file_name
         self._image_tensor: Optional[torch.Tensor] = None
+        self.cache_image = cache_image
+        self.bounding_boxes = bounding_boxes
+        if self.file_name is None:
+            raise Exception("File name not set.")
+        
+        self._original_size = self.get_original_size()
+        self.resized_size = self.get_resized_size()
 
-        # Chargement
+        # Draw grid
+        self.grid_division_x = self.resized_size[0] // reduction_factor
+        self.grid_division_y = self.resized_size[1] // reduction_factor
+
+        
         
         self.to_tensor = transforms.ToTensor()
         #self.normalize = transforms.Normalize(mean=self.mean, std=self.std)
@@ -193,17 +204,24 @@ class CustomImage:
         self._scale = 1.0
         self._pad = (0, 0)  # (left, top)
         
+    def is_loaded(self) -> bool:
+        return self._image_tensor is not None
 
     def load_image(self) -> torch.Tensor:
         # Charger l'image depuis le fichier
+        if self.is_loaded():
+            return self._image_tensor
 
         image_pil = PILImage.open(self.file_name).convert("RGB")
 
         image_tensor = self.to_tensor(image_pil)  # [C, H, W]
-        self._original_size = (image_tensor.size(2),image_tensor.size(1)) # (W,H)
+        
         image_tensor= self._apply_letterbox(image_tensor=image_tensor)
         if image_tensor is None:
             raise Exception("Image_tensor is none : file_name :",self)
+
+        if self.cache_image:
+            self._image_tensor = image_tensor
         return image_tensor
 
     def _apply_letterbox(self,image_tensor):
@@ -214,10 +232,10 @@ class CustomImage:
             box.y_center_cell = (box.y_center*self.grid_division_y) - coordinates[0]
         
         W,H = image_tensor.size(2),image_tensor.size(1)
-        if (W,H) == self.target_size:
+        if (W,H) == self.resized_size:
             return image_tensor
 
-        image_tensor = self.resize_image(self.target_size,image_tensor=image_tensor)
+        image_tensor = self.resize_image(self.resized_size,image_tensor=image_tensor)
         if image_tensor is None:
             raise Exception("Image_tensor is none after resize : file_name :",self)
         
@@ -262,7 +280,9 @@ class CustomImage:
         return image_tensor
 
     def get_raw_tensor(self) -> torch.Tensor:
+        
         if self._image_tensor is not None:
+            
             return self._image_tensor
         else:
             return self.load_image()
@@ -270,9 +290,25 @@ class CustomImage:
     def get_bounding_boxes(self) -> list[BoundingBox]:
         return self._bb_boxes
 
-    def get_bounding_boxes_tensors(self) -> torch.Tensor:
-        tensors = [box.get_normalized_tensor(self.target_size[0]) for box in self._bb_boxes]
-        return torch.from_numpy(np.stack(tensors)) if tensors else torch.zeros((0, 5 + self._bb_boxes[0].num_classes))
+    def get_original_size(self) -> Tuple[int, int]:
+        if self._original_size == (0, 0):
+            if self.file_name is None:
+                raise Exception("File name not set. Load the image first.")
+            image_pil = PILImage.open(self.file_name).convert("RGB")
+            self._original_size = (image_pil.size[0], image_pil.size[1])
+        return self._original_size
+
+    def get_resized_size(self) -> Tuple[int, int]:
+        if self._original_size == (0, 0):
+            print("Original size not set. Load the image first.")
+            self.get_original_size()
+        self.resized_size = (int(self._original_size[0]//self.reduction_factor -1)*self.reduction_factor,
+                            int(self._original_size[1]//self.reduction_factor -1)*self.reduction_factor)
+        # ajuste à la grille la plus proche en dessous
+        if self.resized_size[0] > self.max_size[0] or self.resized_size[1] > self.max_size[1]:
+            self.resized_size = (int(self.max_size[0]//self.reduction_factor -1)*self.reduction_factor,
+                        int(self.max_size[1]//self.reduction_factor -1)*self.reduction_factor)
+        return self.resized_size
 
     def show_image(self, predicted_bb_boxes: list[BoundingBox] = None):
         if predicted_bb_boxes is None:
@@ -293,7 +329,7 @@ class CustomImage:
         # GT (bleu)
         for box in self._bb_boxes:
             cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-            coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+            coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
             x1 = int(coordinates.x_center - coordinates.width / 2)
             y1 = int(coordinates.y_center - coordinates.height / 2)
             x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -315,7 +351,7 @@ class CustomImage:
                     max_objectness_index = np.argmax(np.array(objectnesses))
                     selected_box = cell[max_objectness_index]
                     cell_position = selected_box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                    coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
                     x1 = int(coordinates.x_center - coordinates.width / 2)
                     y1 = int(coordinates.y_center - coordinates.height / 2)
                     x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -326,7 +362,7 @@ class CustomImage:
             else:
                 for box in predicted_bb_boxes:
                     cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                    coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.target_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
                     x1 = int(coordinates.x_center - coordinates.width / 2)
                     y1 = int(coordinates.y_center - coordinates.height / 2)
                     x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -351,7 +387,7 @@ class CustomImage:
         return cls(
             file_path=file_path,
             bounding_boxes=bounding_boxes,
-            target_size=target_size,
+            max_size=target_size,
             reduction_factor=reduction_factor,
             file_name=file_name
         )
@@ -377,7 +413,7 @@ class CustomImage:
         image = cls(
             file_name=file_name,
             bounding_boxes=bounding_boxes, 
-            target_size=target_size,
+            max_size=target_size,
             reduction_factor=reduction_factor,
         )
         
@@ -392,9 +428,9 @@ class CustomImage:
 
     def __repr__(self):
         if self.file_name:
-            return f"CustomImage(file='{self.file_name}', boxes={len(self._bb_boxes)}, size={self._original_size} → {self.target_size})"
+            return f"CustomImage(file='{self.file_name}', boxes={len(self._bb_boxes)}, size={self._original_size} → {self.resized_size})"
         else:
-            return f"CustomImage(boxes={len(self._bb_boxes)}, size={self._original_size} → {self.target_size})"
+            return f"CustomImage(boxes={len(self._bb_boxes)}, size={self._original_size} → {self.resized_size})"
 
 
 def get_classes(directory:str):
