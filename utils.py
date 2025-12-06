@@ -27,24 +27,30 @@ def IoU(gt: BoundingBox, pred: BoundingBox) -> float:
 
 def batch_IoU(pred_boxes : torch.tensor , true_boxes: torch.tensor):
     
-    x_1_pred_tensor = pred_boxes[...,:1]
-    x_1_ground_truth_tensor = true_boxes[...,:1]
+    x_center_pred_tensor = pred_boxes[...,1]
+    x_center_ground_truth_tensor = true_boxes[...,1]
 
-    y_1_pred_tensor = pred_boxes[...,1:2]
-    y_1_ground_truth_tensor = true_boxes[...,1:2]
+    y_center_pred_tensor = pred_boxes[...,2]
+    y_center_ground_truth_tensor = true_boxes[...,2]
 
-    width_pred_tensor = pred_boxes[...,2:3]
-    width_ground_truth_tensor = true_boxes[...,2:3]
+    width_pred_tensor = pred_boxes[...,3]
+    width_ground_truth_tensor = true_boxes[...,3]
 
-    height_pred_tensor = pred_boxes[...,3:4]
-    height_ground_truth_tensor = true_boxes[...,3:4]
+    height_pred_tensor = pred_boxes[...,4]
+    height_ground_truth_tensor = true_boxes[...,4]
+
+    x_1_pred_tensor = x_center_pred_tensor - width_pred_tensor/2
+    x_1_ground_truth_tensor = x_center_ground_truth_tensor - width_ground_truth_tensor/2
+
+    y_1_pred_tensor = y_center_pred_tensor - height_pred_tensor/2
+    y_1_ground_truth_tensor = y_center_ground_truth_tensor - height_ground_truth_tensor/2
 
 
-    x_2_pred_tensor = width_pred_tensor+x_1_pred_tensor
-    x_2_ground_truth_tensor = width_ground_truth_tensor+x_1_ground_truth_tensor
+    x_2_pred_tensor = x_center_pred_tensor + width_pred_tensor/2    
+    x_2_ground_truth_tensor = x_center_ground_truth_tensor + width_ground_truth_tensor/2
 
-    y_2_pred_tensor = height_pred_tensor + y_1_pred_tensor
-    y_2_ground_truth_tensor = height_ground_truth_tensor +y_1_ground_truth_tensor
+    y_2_pred_tensor = y_center_pred_tensor + height_pred_tensor/2
+    y_2_ground_truth_tensor = y_center_ground_truth_tensor + height_ground_truth_tensor/2
 
     x_1_inter = torch.max(x_1_ground_truth_tensor,x_1_pred_tensor)
     x_2_inter = torch.min(x_2_pred_tensor,x_2_ground_truth_tensor)
