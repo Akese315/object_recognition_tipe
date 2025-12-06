@@ -104,70 +104,61 @@ class LightweightYOLO(nn.Module):
 
     def get_reduction_factor(self):
         return self.reduction_factor
-        # self.smooth_factor = smooth_factor # Removed broken line
 
 class YoloLoss(nn.Module):
-    def __init__(self, lambda_coord=5.0, lambda_noobj=0.1, lambda_obj=1.0, smooth_factor=0.0, IoU_loss=True):
+    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0, IoU_loss=True):
         super(YoloLoss, self).__init__()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
         self.IoU_loss = IoU_loss
         self.smooth_factor = smooth_factor
+        
         self.mse = nn.MSELoss(reduction='sum')
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
 
     def forward(self, preds, targets):
         # preds, targets = [B, H, W, A, 5+C]
-        device = preds.device # Important pour que les tenseurs créés soient sur le GPU
+        device = preds.device 
 
+        # 1. Calcul IoU
         iou_scores = batch_IoU(preds, targets).detach().clamp(0, 1)
 
-        B,H, W, A, S = preds.shape
-        n_class = S - 5 # Nombre de classes 5 est pour (obj, x, y, w, h)
+        B, H, W, A, S = preds.shape
+        n_class = S - 5 
         
         obj_mask = targets[..., 0] == 1 
         noobj_mask = targets[..., 0] == 0
 
-        # 1. Loss Coordonnées (uniquement si objet présent)
-        # Attention: s'assurer que targets contient les valeurs relatives à la cellule (0-1)
+        # --- Loss Coordonnées ---
         loss_coord = self.mse(preds[..., 1:3][obj_mask], targets[..., 1:3][obj_mask]) \
                    + self.mse(preds[..., 3:5][obj_mask], targets[..., 3:5][obj_mask])
         
+        # --- Loss Objectness ---
         target_obj = torch.zeros_like(preds[..., 0], device=device)
 
         if self.IoU_loss:
-            # On crée un tenseur cible pour l'objectness rempli de zéros
-            target_obj = torch.zeros_like(preds[..., 0],device=device)
-            
-            # Là où il y a un objet, la cible n'est PAS 1.0, mais l'IoU calculée (ex: 0.78)
-            target_obj[obj_mask] = iou_scores[obj_mask]
+            target_obj[obj_mask] = iou_scores[obj_mask] # Vise l'IoU
         else:
-            #solution de base où on vise 1.0 pour les objets
-            target_obj[obj_mask] = 1.0
+            target_obj[obj_mask] = 1.0 # Vise 1.0 
 
-        # 2. Loss Objectness
         loss_obj = self.bce(preds[..., 0][obj_mask], target_obj[obj_mask])
         loss_noobj = self.bce(preds[..., 0][noobj_mask], target_obj[noobj_mask])
         
-        # 3. Loss Classes
+        # --- Loss Classes ---
+        loss_class = torch.tensor(0.0, device=device)
 
-        class_smooth = 1-self.smooth_factor
+        class_smooth = 1 - self.smooth_factor
         no_class_smooth = 0
         if n_class > 1:
-            no_class_smooth = self.smooth_factor/(n_class-1)
-            
-        loss_class = torch.tensor(0.0, device=device)
-    
-        if preds.size(-1) > 5:
-            t_class =  targets[..., 5:][obj_mask]
+            no_class_smooth = self.smooth_factor / (n_class - 1)
 
-            t_class_smoothed  =  targets[..., 5:][obj_mask] * class_smooth + (1-t_class)*no_class_smooth
-
+        if preds.size(-1) > 5 and obj_mask.sum() > 0:
+            t_class = targets[..., 5:][obj_mask]
+            t_class_smoothed = t_class * class_smooth + (1 - t_class) * no_class_smooth
             loss_class = self.bce(preds[..., 5:][obj_mask], t_class_smoothed)
 
-        # On divise par le nombre d'objets réels dans le batch, pas la taille du batch.
-        # On ajoute 1e-6 pour éviter la division par zéro si batch vide.
+        # --- Normalisation ---
         num_objects = obj_mask.sum().float() + 1e-6
 
         total = (
@@ -177,12 +168,16 @@ class YoloLoss(nn.Module):
             loss_class
         ) / num_objects
 
-        avg_iou = iou_scores[obj_mask].mean() if obj_mask.sum() > 0 else 0
+        # On extrait la valeur float directement
+        if obj_mask.sum() > 0:
+            avg_iou_val = iou_scores[obj_mask].mean().item()
+        else:
+            avg_iou_val = 0.0
 
         return total, {
             "coord": loss_coord.item(),
             "obj": loss_obj.item(),
             "noobj": loss_noobj.item(),
             "class": loss_class.item(),
-            "iou": avg_iou.item()
+            "iou": avg_iou_val
         }

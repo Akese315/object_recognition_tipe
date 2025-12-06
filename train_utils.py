@@ -15,101 +15,147 @@ import io
 from PIL import Image
 import time
 
-def run_one_epoch(loader:DataLoader, model, loss_fn, optimizer, scheduler, device, N_CLASS, reduction_factor, centers,N_ANCHORS, train=True,show=False):
+def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS, reduction_factor, centers, N_ANCHORS, train=True, show=False):
     model.train(train)
     model.to(device)
+    
     running_loss = 0.0
-    running_components = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0}
+    # On ajoute "iou" aux composants suivis
+    running_components = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0, "iou": 0.0}
+    
     preds, targets = [], []
     start_time = time.time()
-    for images, labels in tqdm(loader,desc="batch : ",leave=True):
-        time_end = time.time()
-        #print(f"Batch preparation time : {time_end - start_time}")
+
+    loop = tqdm(loader, desc="Train" if train else "Val", leave=True)
+
+    for images, labels in loop:
         inputs = images.to(device, dtype=torch.float32)
         labels = labels.to(device, dtype=torch.float32)
-
 
         if train:
             optimizer.zero_grad()
 
         with torch.set_grad_enabled(train):
-            
             outputs = model(inputs)
+            
+            # La Loss retourne (total_loss, dict_components)
             loss, components = loss_fn(outputs, labels)
-
 
             if train:
                 loss.backward()
+                # Gradient Clipping (Conseillé pour YOLO pour éviter les explosions)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                
                 optimizer.step()
                 if scheduler is not None and isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
                     scheduler.step()
 
-            if show :
-                
-                copied_labels = torch.clone(labels).detach().cpu()
-                copied_outputs = model.predict(outputs).detach().cpu()
-                copied_inputs = torch.clone(inputs).detach().cpu()
-                B,grid_division_y,grid_division_x,A,S = copied_outputs.shape
-                H, W = copied_inputs.shape[2], copied_inputs.shape[3]
-                images = []
-                for i in range(B):
+            # --- Visualisation (Optionnel) ---
+            if show:
+                # Note: Cette section dépend de vos classes BoundingBox/CustomImage externes.
+                # Je l'ai laissée telle quelle mais protégée par un try/except pour éviter de casser le train.
+                try:
+                    copied_labels = labels.detach().cpu()
+                    copied_outputs = model.predict(outputs).detach().cpu() # Assurez-vous que model.predict existe
+                    copied_inputs = inputs.detach().cpu()
+                    
+                    B_batch, _, _, _, _ = copied_outputs.shape
+                    H, W = copied_inputs.shape[2], copied_inputs.shape[3]
+                    vis_images = []
+                    
+                    for i in range(min(B_batch, 4)): # On ne montre que 4 images max pour pas ralentir
+                        input_boxes = []
+                        indices = find_objects(copied_labels[i])
+                        # Récupération grid size depuis output shape
+                        _, grid_div_y, grid_div_x, _, _ = copied_outputs.shape
+                        
+                        for indice in indices:
+                            # Attention aux indices de classe et bbox
+                            input_boxes.append(BoundingBox.from_tensor(
+                                copied_labels[i, indice[0], indice[1], indice[2], :],
+                                N_CLASS, indice[0], indice[1], grid_div_x, grid_div_y
+                            ))
 
-                    input_boxes = []
-                    indices = find_objects(copied_labels[i])
-                    for indice in indices:
-                        input_boxes.append(BoundingBox.from_tensor(copied_labels[i,indice[0],indice[1],indice[2],:],N_CLASS,indice[0],indice[1],grid_division_x,grid_division_y))
+                        custom_img = CustomImage.from_tensor(
+                            image_tensor=inputs[i],
+                            bounding_boxes=input_boxes,
+                            target_size=(W, H),
+                            reduction_factor=reduction_factor
+                        )
+                        
+                        output_bb_boxes = []
+                        # Visualisation des prédictions aux endroits où il y a des objets (Debug Focus)
+                        for bb_box in custom_img.get_bounding_boxes():
+                            position = bb_box.get_cell_position(grid_div_x, grid_div_y)
+                            x, y = int(position[0]), int(position[1])
+                            
+                            # On récupère les N_ANCHORS prédictions à cet endroit
+                            output_bb_boxes.append([
+                                BoundingBox.from_tensor(
+                                    copied_outputs[i, x, y, a, :],
+                                    N_CLASS, x, y, grid_div_x, grid_div_y
+                                ) for a in range(N_ANCHORS)
+                            ])
+                        
+                        output_bb_boxes = np.array(output_bb_boxes)
+                        vis_images.append(custom_img.get_image(output_bb_boxes))
 
-                    custom_img= CustomImage.from_tensor(image_tensor=inputs[i],bounding_boxes=input_boxes,
-                                       target_size=(W,H),reduction_factor=reduction_factor)
-                    B,grid_division_y, grid_division_x, A, S = copied_outputs.shape
-                    W, H = custom_img.target_size
-                    output_bb_boxes = []
-                    for bb_box in custom_img.get_bounding_boxes():
-                        position = bb_box.get_cell_position(grid_division_x,grid_division_y)
+                    # Affichage Matplotlib
+                    if len(vis_images) > 0:
+                        vis_images_np = np.array(vis_images)
+                        grid_size = math.ceil(math.sqrt(len(vis_images)))
+                        fig, axes = plt.subplots(grid_size, grid_size, figsize=(8, 8))
+                        if isinstance(axes, np.ndarray):
+                            axes = axes.flatten()
+                        else:
+                            axes = [axes]
+                            
+                        for i, ax in enumerate(axes):
+                            if i < len(vis_images):
+                                ax.imshow(vis_images_np[i])
+                            ax.axis('off')
+                        plt.tight_layout()
+                        plt.show()
+                        
+                except Exception as e:
+                    print(f"Erreur visualisation : {e}")
+            # ---------------------------------
 
-                        anchor_index = bb_box.get_bounding_box_index(centers)
-                        x,y = position
-    
-                        output_bb_boxes.append([BoundingBox.from_tensor(copied_outputs[i,int(x),int(y),a,:],N_CLASS,int(x),int(y),grid_division_x,grid_division_y) for a in range(N_ANCHORS)])
-                    output_bb_boxes = np.array(output_bb_boxes)
-                    images.append(custom_img.get_image(output_bb_boxes))
-
-                images_np = np.array(images)  # (B,H,W,C)
-                batch_size = images_np.shape[0]
-                grid_size = math.ceil(math.sqrt(batch_size))  # Taille de la grille
-
-                fig, axes = plt.subplots(grid_size, grid_size, figsize=(4*grid_size, 4*grid_size))
-                axes = axes.flatten()  # Pour itérer facilement même si c'est 2D
-
-                for i in range(batch_size):
-                    axes[i].imshow(images_np[i])
-                    axes[i].axis('off')
-
-                # Masquer les axes vides si batch_size < grid_size**2
-                for i in range(batch_size, grid_size**2):
-                    axes[i].axis('off')
-
-                plt.tight_layout()
-                plt.show()
+        # Mise à jour des stats
         running_loss += loss.item()
+        
+        # CORRECTION CRITIQUE ICI :
+        # Votre nouvelle loss renvoie déjà des floats dans 'components', pas des tenseurs.
+        # Donc on n'appelle PAS .item()
         for k, v in components.items():
-            running_components[k] += v.item()
+            if k in running_components:
+                running_components[k] += v # v est déjà un float
+
+        # Mise à jour de la barre de progression
+        loop.set_postfix(loss=loss.item(), iou=components.get('iou', 0.0))
 
         if not train:
             preds.append(outputs.detach().cpu())
             targets.append(labels.detach().cpu())
 
-        start_time = time.time()
-
+    # Fin de l'époque
     epoch_loss = running_loss / len(loader)
     epoch_components = {k: v / len(loader) for k, v in running_components.items()}
+
+    # Enregistrement historique
     if train:
         if not hasattr(model, 'loss_history'):
-            model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
+            # On s'assure que toutes les clés existent
+            model.loss_history = {k: [] for k in running_components.keys()}
+            model.loss_history["total"] = []
+
         model.loss_history["total"].append(epoch_loss)
+        
         for k, v in epoch_components.items():
-            if k in model.loss_history:
-                model.loss_history[k].append(v)
+            # Initialisation lazy si une nouvelle clé (comme 'iou') apparaît
+            if k not in model.loss_history:
+                model.loss_history[k] = []
+            model.loss_history[k].append(v)
 
     return epoch_loss
 
