@@ -172,10 +172,11 @@ class CustomImage:
         max_size: Tuple[int, int] = None,
         reduction_factor: int = 8,
         cache_image: bool = False,
+        original_size: Optional[Tuple[int, int]] = None,
         ):
 
         self.max_size = max_size
-        self._original_size = (0, 0)
+        self._original_size = original_size
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
         self.reduction_factor = reduction_factor
@@ -183,8 +184,7 @@ class CustomImage:
         self._image_tensor: Optional[torch.Tensor] = None
         self.cache_image = cache_image
         self.bounding_boxes = bounding_boxes
-        if self.file_name is None:
-            raise Exception("File name not set.")
+        
         
         self._original_size = self.get_original_size()
         self.resized_size = self.get_resized_size()
@@ -225,6 +225,8 @@ class CustomImage:
         return image_tensor
 
     def _apply_letterbox(self,image_tensor):
+
+
 
         for box in self._bb_boxes:
             coordinates = box.get_cell_position(self.grid_division_x, self.grid_division_y)
@@ -299,7 +301,7 @@ class CustomImage:
         return self._original_size
 
     def get_resized_size(self) -> Tuple[int, int]:
-        if self._original_size == (0, 0):
+        if self._original_size is None:
             print("Original size not set. Load the image first.")
             self.get_original_size()
         self.resized_size = (int(self._original_size[0]//self.reduction_factor -1)*self.reduction_factor,
@@ -410,17 +412,16 @@ class CustomImage:
         # 1. Créer une instance avec un chemin factice (pour satisfaire l'__init__ qui attend file_path)
         
         # L'image de prédiction n'a pas de Ground Truth, donc bounding_boxes est vide
+
+        original_size = (image_tensor.size(2), image_tensor.size(1)) 
+
         image = cls(
             file_name=file_name,
             bounding_boxes=bounding_boxes, 
             max_size=target_size,
+            original_size=original_size,
             reduction_factor=reduction_factor,
         )
-        
-        # 2. Remplacer le tenseur interne et la taille originale
-        image._image_tensor = image_tensor
-        # Le tenseur est en [C, H, W]. On utilise [2] pour W et [1] pour H.
-        image._original_size = (image_tensor.size(2), image_tensor.size(1)) 
         # 3. Appliquer le prétraitement (redimensionnement et padding) au tenseur préchargé
         image._image_tensor = image._apply_letterbox(image_tensor) 
         

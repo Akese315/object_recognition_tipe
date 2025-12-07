@@ -8,15 +8,14 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'first_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-05 10-21-59/model.pth'
-N_ANCHORS = 3
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-04 12-48-42/model.pth'
+N_ANCHORS = 1
 
-CONF_THRESHOLD = 0.50
+CONF_THRESHOLD = 0.2
 CLASS_THESHOLD = 0.8
 IOU_THRESHOLD = 0.4
 
-CLASSES = ["face","card","screen"
-]
+CLASSES = ["ball"]
 
 N_CLASS = len(CLASSES)
 COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen

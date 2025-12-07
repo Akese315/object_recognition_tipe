@@ -38,11 +38,11 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
         with torch.set_grad_enabled(train):
             outputs = model(inputs)
             
-            # La Loss retourne (total_loss, dict_components)
             loss, components = loss_fn(outputs, labels)
 
             if train:
                 loss.backward()
+                
                 # Gradient Clipping (Conseillé pour YOLO pour éviter les explosions)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 
@@ -52,25 +52,21 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
 
             # --- Visualisation (Optionnel) ---
             if show:
-                # Note: Cette section dépend de vos classes BoundingBox/CustomImage externes.
-                # Je l'ai laissée telle quelle mais protégée par un try/except pour éviter de casser le train.
                 try:
                     copied_labels = labels.detach().cpu()
-                    copied_outputs = model.predict(outputs).detach().cpu() # Assurez-vous que model.predict existe
+                    copied_outputs = model.predict(outputs).detach().cpu()
                     copied_inputs = inputs.detach().cpu()
                     
                     B_batch, _, _, _, _ = copied_outputs.shape
                     H, W = copied_inputs.shape[2], copied_inputs.shape[3]
                     vis_images = []
                     
-                    for i in range(min(B_batch, 4)): # On ne montre que 4 images max pour pas ralentir
+                    for i in range(min(B_batch, 4)):
                         input_boxes = []
                         indices = find_objects(copied_labels[i])
-                        # Récupération grid size depuis output shape
                         _, grid_div_y, grid_div_x, _, _ = copied_outputs.shape
                         
                         for indice in indices:
-                            # Attention aux indices de classe et bbox
                             input_boxes.append(BoundingBox.from_tensor(
                                 copied_labels[i, indice[0], indice[1], indice[2], :],
                                 N_CLASS, indice[0], indice[1], grid_div_x, grid_div_y
@@ -84,12 +80,11 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
                         )
                         
                         output_bb_boxes = []
-                        # Visualisation des prédictions aux endroits où il y a des objets (Debug Focus)
+                        
                         for bb_box in custom_img.get_bounding_boxes():
                             position = bb_box.get_cell_position(grid_div_x, grid_div_y)
                             x, y = int(position[0]), int(position[1])
                             
-                            # On récupère les N_ANCHORS prédictions à cet endroit
                             output_bb_boxes.append([
                                 BoundingBox.from_tensor(
                                     copied_outputs[i, x, y, a, :],
@@ -100,7 +95,6 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
                         output_bb_boxes = np.array(output_bb_boxes)
                         vis_images.append(custom_img.get_image(output_bb_boxes))
 
-                    # Affichage Matplotlib
                     if len(vis_images) > 0:
                         vis_images_np = np.array(vis_images)
                         grid_size = math.ceil(math.sqrt(len(vis_images)))
@@ -119,19 +113,13 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
                         
                 except Exception as e:
                     print(f"Erreur visualisation : {e}")
-            # ---------------------------------
 
-        # Mise à jour des stats
         running_loss += loss.item()
         
-        # CORRECTION CRITIQUE ICI :
-        # Votre nouvelle loss renvoie déjà des floats dans 'components', pas des tenseurs.
-        # Donc on n'appelle PAS .item()
         for k, v in components.items():
             if k in running_components:
-                running_components[k] += v # v est déjà un float
+                running_components[k] += v
 
-        # Mise à jour de la barre de progression
         loop.set_postfix(loss=loss.item(), iou=components.get('iou', 0.0))
 
         if not train:
