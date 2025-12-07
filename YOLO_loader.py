@@ -176,7 +176,6 @@ class CustomImage:
         ):
 
         self.max_size = max_size
-        self._original_size = original_size
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
         self.reduction_factor = reduction_factor
@@ -184,9 +183,13 @@ class CustomImage:
         self._image_tensor: Optional[torch.Tensor] = None
         self.cache_image = cache_image
         self.bounding_boxes = bounding_boxes
+        self._original_size: Optional[Tuple[int, int]] = None
         
+        if original_size is not None:
+            self._original_size = original_size
+        else:
+            self._original_size = self.get_original_size()
         
-        self._original_size = self.get_original_size()
         self.resized_size = self.get_resized_size()
 
         # Draw grid
@@ -225,8 +228,6 @@ class CustomImage:
         return image_tensor
 
     def _apply_letterbox(self,image_tensor):
-
-
 
         for box in self._bb_boxes:
             coordinates = box.get_cell_position(self.grid_division_x, self.grid_division_y)
@@ -293,7 +294,7 @@ class CustomImage:
         return self._bb_boxes
 
     def get_original_size(self) -> Tuple[int, int]:
-        if self._original_size == (0, 0):
+        if self._original_size is None:
             if self.file_name is None:
                 raise Exception("File name not set. Load the image first.")
             image_pil = PILImage.open(self.file_name).convert("RGB")
