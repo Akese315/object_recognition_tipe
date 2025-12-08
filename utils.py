@@ -27,6 +27,7 @@ def IoU(gt: BoundingBox, pred: BoundingBox) -> float:
 
 def batch_IoU(pred_boxes : torch.tensor , true_boxes: torch.tensor):
     
+
     x_center_pred_tensor = pred_boxes[...,1]
     x_center_ground_truth_tensor = true_boxes[...,1]
 

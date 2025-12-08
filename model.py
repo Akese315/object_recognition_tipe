@@ -14,7 +14,7 @@ class ConvBlock(nn.Module):
         return self.relu(self.bn(self.conv(x)))
     
 class YOLOHead(nn.Module):
-    def __init__(self, num_classes, num_anchors,kernel_size):
+    def __init__(self, num_classes, num_anchors, kernel_size):
         super(YOLOHead, self).__init__()   
         self.num_classes = num_classes
         self.num_anchors = num_anchors
@@ -26,11 +26,11 @@ class YOLOHead(nn.Module):
     def forward(self, x):
         B, _, H, W = x.shape
         
-        pred = self.detector(x)                       # [B, A*(5+C), H, W]
-        pred = pred.permute(0, 2, 3, 1).contiguous()  # [B, H, W, A*(5+C)]
-        pred = pred.view(B, H, W, self.num_anchors, 5 + self.num_classes)  # [B, H, W, A, 5+C]
+        pred = self.detector(x)
+        pred = pred.permute(0, 2, 3, 1).contiguous()
+        pred = pred.view(B, H, W, self.num_anchors, 5 + self.num_classes)
 
-        # Split predictions
+        # Extraction des composantes
         tobj = pred[..., 0]
         tx = pred[..., 1]
         ty = pred[..., 2]
@@ -38,16 +38,34 @@ class YOLOHead(nn.Module):
         th = pred[..., 4]
         tcls = pred[..., 5:]
 
-        # Activations
-        bx = torch.sigmoid(tx) 
-        by = torch.sigmoid(ty) 
+        # --- CORRECTION CRITIQUE : CALCUL DE LA POSITION AVEC GRILLE ---
+        
+        # 1. Générer la grille de coordonnées (ex: 0, 1, 2, ..., 12)
+        # device=x.device assure que la grille est créée sur le GPU si nécessaire
+        grid_y, grid_x = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
+        
+        # 2. Remodeler pour le broadcasting : [1, H, W, 1]
+        # On veut pouvoir additionner ça à nos prédictions qui sont [B, H, W, A]
+        grid_x = grid_x.view(1, H, W, 1).float()
+        grid_y = grid_y.view(1, H, W, 1).float()
+
+        # 3. Calculer la position GLOBALE normalisée (0.0 à 1.0)
+        # Formule : (Offset Local + Index Grille) / Taille Grille
+        bx = (torch.sigmoid(tx) + grid_x) / W
+        by = (torch.sigmoid(ty) + grid_y) / H
+        
+        # ---------------------------------------------------------------
+
+        # Pour la largeur/hauteur, on garde votre méthode actuelle (Sigmoïde)
+        # Comme vos objets sont petits, ça marchera maintenant que la position est bonne.
         bw = torch.sigmoid(tw) 
         bh = torch.sigmoid(th) 
 
+        # On garde les logits pour l'objectness et les classes (pour BCEWithLogitsLoss)
         obj_score = tobj
         cls_prob = tcls
 
-        # Concat final [objectness, bx, by, bw, bh, class_probs]
+        # Reconstitution du tenseur de sortie
         pred_boxes = torch.stack([obj_score, bx, by, bw, bh], dim=-1)
         pred_final = torch.cat([pred_boxes, cls_prob], dim=-1)
 
@@ -129,6 +147,7 @@ class YoloLoss(nn.Module):
         
         obj_mask = targets[..., 0] == 1 
         noobj_mask = targets[..., 0] == 0
+        
 
         # --- Loss Coordonnées ---
         loss_coord = self.mse(preds[..., 1:3][obj_mask], targets[..., 1:3][obj_mask]) \
