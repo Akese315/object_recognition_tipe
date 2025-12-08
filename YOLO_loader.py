@@ -97,7 +97,7 @@ class BoundingBox:
             0x06: class1\n
             ..."""
         return np.concatenate([
-            np.array([float(self.objectness), self.x_center_cell, self.y_center_cell, self.width, self.height], dtype=np.float32),
+            np.array([float(self.objectness), self.x_center, self.y_center, self.width, self.height], dtype=np.float32),
             self.class_tensor
         ])
 

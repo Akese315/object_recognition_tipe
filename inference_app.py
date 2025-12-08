@@ -8,10 +8,10 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-08 16-30-46/model.pth'
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-08 20-07-41/model.pth'
 N_ANCHORS = 1
 
-CONF_THRESHOLD = 0.2
+CONF_THRESHOLD = 0.01
 CLASS_THESHOLD = 0.8
 IOU_THRESHOLD = 0.4
 
