@@ -24,8 +24,9 @@ class YOLOHead(nn.Module):
         self.detector = nn.Conv2d(self.kernel_size, out_channels, kernel_size=1)
 
     def forward(self, x):
-        B, _, H, W = x.shape
         
+        B, _, H, W = x.shape
+
         pred = self.detector(x)
         pred = pred.permute(0, 2, 3, 1).contiguous()
         pred = pred.view(B, H, W, self.num_anchors, 5 + self.num_classes)
@@ -36,30 +37,13 @@ class YOLOHead(nn.Module):
         ty = pred[..., 2]
         tw = pred[..., 3]
         th = pred[..., 4]
-        tcls = pred[..., 5:]
+        tcls = pred[..., 5:]        
 
-        # --- CORRECTION CRITIQUE : CALCUL DE LA POSITION AVEC GRILLE ---
-        
-        # 1. Générer la grille de coordonnées (ex: 0, 1, 2, ..., 12)
-        # device=x.device assure que la grille est créée sur le GPU si nécessaire
-        grid_y, grid_x = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
-        
-        # 2. Remodeler pour le broadcasting : [1, H, W, 1]
-        # On veut pouvoir additionner ça à nos prédictions qui sont [B, H, W, A]
-        grid_x = grid_x.view(1, H, W, 1).float()
-        grid_y = grid_y.view(1, H, W, 1).float()
-
-        # 3. Calculer la position GLOBALE normalisée (0.0 à 1.0)
-        # Formule : (Offset Local + Index Grille) / Taille Grille
-        bx = (torch.sigmoid(tx) + grid_x) / W
-        by = (torch.sigmoid(ty) + grid_y) / H
-        
-        # ---------------------------------------------------------------
-
-        # Pour la largeur/hauteur, on garde votre méthode actuelle (Sigmoïde)
-        # Comme vos objets sont petits, ça marchera maintenant que la position est bonne.
         bw = torch.sigmoid(tw) 
         bh = torch.sigmoid(th) 
+
+        bx = torch.sigmoid(tx)
+        by = torch.sigmoid(ty)
 
         # On garde les logits pour l'objectness et les classes (pour BCEWithLogitsLoss)
         obj_score = tobj
@@ -100,23 +84,35 @@ class LightweightYOLO(nn.Module):
             new_H = (H // self.reduction_factor + 1) * self.reduction_factor
             new_W = (W // self.reduction_factor + 1) * self.reduction_factor
             # On évite le print ici pour ne pas spammer les logs
-            #x = nn.functional.interpolate(x, size=(new_H, new_W), mode='bilinear', align_corners=False)
+            x = nn.functional.interpolate(x, size=(new_H, new_W), mode='bilinear', align_corners=False)
 
         features = self.backbone(x)
         return self.head(features)
-    
+        
     def predict(self, x):
-         
+        B, H, W, A, _ = x.shape
+
         tobj = x[..., 0]
         tx = x[..., 1]
         ty = x[..., 2]
-        tw = x[..., 3]
-        th = x[..., 4]
+        bw = x[..., 3]
+        bh = x[..., 4]
         tcls = x[..., 5:]
+
+        grid_y, grid_x = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
+
+        grid_x = grid_x.view(1, H, W, 1).float()
+        grid_y = grid_y.view(1, H, W, 1).float()
+
+        
+        bx = (tx + grid_x) / W
+        by = (ty + grid_y) / H
+         
+        
         obj_score = torch.sigmoid(tobj)
         cls_prob = torch.sigmoid(tcls)
 
-        pred_boxes = torch.stack([obj_score, tx, ty, tw, th], dim=-1)
+        pred_boxes = torch.stack([obj_score, bx, by, bw, bh], dim=-1)
         pred_final = torch.cat([pred_boxes, cls_prob], dim=-1)
         return pred_final
 
@@ -136,46 +132,64 @@ class YoloLoss(nn.Module):
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
 
     def forward(self, preds, targets):
-        # preds, targets = [B, H, W, A, 5+C]
+        # preds: [B, H, W, A, 5+C] (local sigmoid)
+        # targets: [B, H, W, A, 5+C] (global 0-1)
+        
         device = preds.device 
-
-        # 1. Calcul IoU
-        iou_scores = batch_IoU(preds, targets).detach().clamp(0, 1)
-
         B, H, W, A, S = preds.shape
-        n_class = S - 5 
         
         obj_mask = targets[..., 0] == 1 
         noobj_mask = targets[..., 0] == 0
-        
 
-        # --- Loss Coordonnées ---
-        loss_coord = self.mse(preds[..., 1:3][obj_mask], targets[..., 1:3][obj_mask]) \
-                   + self.mse(preds[..., 3:5][obj_mask], targets[..., 3:5][obj_mask])
+        # --- 1. Préparation des Cibles Locales (pour la régression) ---
+        # On clone pour ne pas casser 'targets' qui sert à l'IoU plus bas
+        t_local = targets.clone()
         
-        # --- Loss Objectness ---
+        # Formule : (Global * TailleGrille) - IndexCellule
+        # Cela donne une valeur entre 0 et 1
+        t_local[..., 1] = t_local[..., 1] * W - torch.floor(t_local[..., 1] * W)
+        t_local[..., 2] = t_local[..., 2] * H - torch.floor(t_local[..., 2] * H)
+
+        # --- 2. Loss Coordonnées ---
+        # On compare des valeurs 0-1 (preds) avec des valeurs 0-1 (t_local)
+        loss_coord = self.mse(preds[..., 1:3][obj_mask], t_local[..., 1:3][obj_mask]) \
+                   + self.mse(preds[..., 3:5][obj_mask], t_local[..., 3:5][obj_mask])
+        
+        # --- 3. Calcul de l'IoU Score (Besoin de Global) ---
+        with torch.no_grad():
+            grid_y, grid_x = torch.meshgrid(torch.arange(H, device=device), torch.arange(W, device=device), indexing='ij')
+            grid_x = grid_x.view(1, H, W, 1).float()
+            grid_y = grid_y.view(1, H, W, 1).float()
+
+            # On reconstruit les prédictions globales pour l'IoU
+            preds_global = preds.clone()
+            preds_global[..., 1] = (preds[..., 1] + grid_x) / W
+            preds_global[..., 2] = (preds[..., 2] + grid_y) / H
+            
+            # targets est toujours global ici (car on a utilisé t_local plus haut)
+            iou_scores = batch_IoU(preds_global, targets).detach().clamp(0, 1)
+
+        # --- 4. Loss Objectness ---
         target_obj = torch.zeros_like(preds[..., 0], device=device)
 
         if self.IoU_loss:
-            target_obj[obj_mask] = iou_scores[obj_mask] # Vise l'IoU
+            target_obj[obj_mask] = iou_scores[obj_mask] # On vise l'IoU réelle
         else:
-            target_obj[obj_mask] = 1.0 # Vise 1.0 
+            target_obj[obj_mask] = 1.0 
 
         loss_obj = self.bce(preds[..., 0][obj_mask], target_obj[obj_mask])
         loss_noobj = self.bce(preds[..., 0][noobj_mask], target_obj[noobj_mask])
         
-        # --- Loss Classes ---
+        # --- 5. Loss Classes ---
         loss_class = torch.tensor(0.0, device=device)
-
-        class_smooth = 1 - self.smooth_factor
-        no_class_smooth = 0
-        if n_class > 1:
-            no_class_smooth = self.smooth_factor / (n_class - 1)
-
         if preds.size(-1) > 5 and obj_mask.sum() > 0:
+            # Gestion du label smoothing manuel
             t_class = targets[..., 5:][obj_mask]
-            t_class_smoothed = t_class * class_smooth + (1 - t_class) * no_class_smooth
-            loss_class = self.bce(preds[..., 5:][obj_mask], t_class_smoothed)
+            if self.smooth_factor > 0:
+                n_c = preds.size(-1) - 5
+                t_class = t_class * (1 - self.smooth_factor) + (self.smooth_factor / n_c)
+            
+            loss_class = self.bce(preds[..., 5:][obj_mask], t_class)
 
         # --- Normalisation ---
         num_objects = obj_mask.sum().float() + 1e-6
@@ -187,16 +201,12 @@ class YoloLoss(nn.Module):
             loss_class
         ) / num_objects
 
-        # On extrait la valeur float directement
-        if obj_mask.sum() > 0:
-            avg_iou_val = iou_scores[obj_mask].mean().item()
-        else:
-            avg_iou_val = 0.0
+        avg_iou = iou_scores[obj_mask].mean().item() if obj_mask.sum() > 0 else 0.0
 
         return total, {
-            "coord": loss_coord.item(),
-            "obj": loss_obj.item(),
-            "noobj": loss_noobj.item(),
-            "class": loss_class.item(),
-            "iou": avg_iou_val
+            "coord": loss_coord.item() / num_objects,
+            "obj": loss_obj.item() / num_objects,
+            "noobj": loss_noobj.item() / num_objects,
+            "class": loss_class.item() / num_objects,
+            "iou": avg_iou
         }

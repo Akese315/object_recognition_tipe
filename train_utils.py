@@ -88,7 +88,7 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
                             output_bb_boxes.append([
                                 BoundingBox.from_tensor(
                                     copied_outputs[i, x, y, a, :],
-                                    N_CLASS, x, y, grid_div_x, grid_div_y
+                                    N_CLASS, grid_div_x, grid_div_y
                                 ) for a in range(N_ANCHORS)
                             ])
                         

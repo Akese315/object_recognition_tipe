@@ -45,10 +45,6 @@ class BoundingBox:
         self.class_id_prob = class_id_prob
         self.num_classes = num_classes
 
-        self.x_center_cell = 0
-        self.y_center_cell = 0
-
-
         # One-hot
         self.class_tensor = np.zeros(num_classes, dtype=np.float32)
         self.class_tensor[class_id] = class_id_prob
@@ -96,29 +92,19 @@ class BoundingBox:
             0x05: class0\n
             0x06: class1\n
             ..."""
-        return np.concatenate([
-            np.array([float(self.objectness), self.x_center, self.y_center, self.width, self.height], dtype=np.float32),
-            self.class_tensor
+        return torch.cat([
+            torch.tensor([float(self.objectness), self.x_center, self.y_center, self.width, self.height], dtype=torch.float32),
+            torch.from_numpy(self.class_tensor)
         ])
-
-    def get_denormalized_tensor(self, target_size: Tuple[int, int], i_cell:int,j_cell:int, grid_division_x:int, grid_division_y:int) -> np.ndarray:
-        t = self.get_tensor().copy()
-        x_scale, y_scale = target_size
-        t[1] = (j_cell + t[1])/grid_division_x * x_scale
-        t[2] = (i_cell + t[2])/grid_division_y * y_scale
-        t[3] *= x_scale
-        t[4] *= y_scale
-        return t
-
     @classmethod
     def from_tensor(
-        cls, tensor: np.ndarray, num_classes: int, i_cell:int,j_cell:int, grid_division_x:int, grid_division_y:int
+        cls, tensor: np.ndarray, num_classes: int, grid_division_x:int, grid_division_y:int
     ) -> "BoundingBox":
         
         """Create a Boundinx from a tensor with the following structure:\n
             0x00: objectness\n
-            0x01: x_center (relative à la cellule)\n
-            0x02: y_center (relative à la cellule)\n
+            0x01: x_center (relative à la l'image)\n
+            0x02: y_center (relative à la l'image)\n
             0x03: width (relative à l'image)\n
             0x04: height (relative à l'image)\n
             0x05: class0\n
@@ -128,13 +114,14 @@ class BoundingBox:
         np_tensor = tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
         objectness = np_tensor[0]
 
-        x_center_cell, y_center_cell, w, h = np_tensor[1:5]
-        x_center = (j_cell + x_center_cell)/grid_division_x
-        y_center = (i_cell + y_center_cell)/grid_division_y
+        x_center, y_center, w, h = np_tensor[1:5]
         
         class_prob = np.max(np_tensor[5:5+num_classes])
         class_id = int(np.argmax(np_tensor[5:5+num_classes]))
-        return cls(objectness,x_center,y_center, w, h, class_id, num_classes,class_prob)
+
+        bbox = cls(objectness,x_center,y_center, w, h, class_id, num_classes,class_prob)
+        #bbox.set_center_cell(grid_division_x,grid_division_y)
+        return bbox
 
     @classmethod
     def from_file(cls,array:np.ndarray,num_classes:int)-> "BoundingBox":
@@ -229,11 +216,6 @@ class CustomImage:
 
     def _apply_letterbox(self,image_tensor):
 
-        for box in self._bb_boxes:
-            coordinates = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-            box.x_center_cell = (box.x_center*self.grid_division_x) - coordinates[1]
-            box.y_center_cell = (box.y_center*self.grid_division_y) - coordinates[0]
-        
         W,H = image_tensor.size(2),image_tensor.size(1)
         if (W,H) == self.resized_size:
             return image_tensor
@@ -331,8 +313,7 @@ class CustomImage:
 
         # GT (bleu)
         for box in self._bb_boxes:
-            cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-            coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+            coordinates = Coordinates.from_tensor(box.get_tensor())
             x1 = int(coordinates.x_center - coordinates.width / 2)
             y1 = int(coordinates.y_center - coordinates.height / 2)
             x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -353,8 +334,7 @@ class CustomImage:
                         objectnesses.append(box.get_objectness())
                     max_objectness_index = np.argmax(np.array(objectnesses))
                     selected_box = cell[max_objectness_index]
-                    cell_position = selected_box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                    coordinates = Coordinates.from_tensor(selected_box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    coordinates = Coordinates.from_tensor(selected_box.get_tensor())
                     x1 = int(coordinates.x_center - coordinates.width / 2)
                     y1 = int(coordinates.y_center - coordinates.height / 2)
                     x2 = int(coordinates.x_center + coordinates.width / 2)
@@ -364,8 +344,7 @@ class CustomImage:
                     cv2.putText(img, f"{selected_box.get_objectness():.2f} {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             else:
                 for box in predicted_bb_boxes:
-                    cell_position = box.get_cell_position(self.grid_division_x, self.grid_division_y)
-                    coordinates = Coordinates.from_tensor(box.get_denormalized_tensor(self.resized_size,cell_position[0],cell_position[1],self.grid_division_x, self.grid_division_y))
+                    coordinates = Coordinates.from_tensor(box.get_tensor())
                     x1 = int(coordinates.x_center - coordinates.width / 2)
                     y1 = int(coordinates.y_center - coordinates.height / 2)
                     x2 = int(coordinates.x_center + coordinates.width / 2)

@@ -213,14 +213,17 @@ class CardRecognitionDataset(Dataset):
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
             x_center,y_center,width,height =torch.tensor(aug_boxes[i])
             box = BoundingBox(True,x_center,y_center,width,height,box.class_id,box.num_classes)
+            #box.set_center_cell(grid_division_x,grid_division_y)
             new_coordinates = box.get_cell_position(grid_division_x, grid_division_y)
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
-
-            box.get_tensor()
+            
             #need to set objectness to 1 and class probabilities to one-hot encoding
-            label[new_coordinates[0],new_coordinates[1],anchor_index,0] = 1.0 # objectness
+
+            label[new_coordinates[0],new_coordinates[1],anchor_index] = box.get_tensor()
+            '''label[new_coordinates[0],new_coordinates[1],anchor_index,0] = 1.0 # objectness
             label[new_coordinates[0],new_coordinates[1],anchor_index,1:5] = torch.tensor(aug_boxes[i])
             label[new_coordinates[0],new_coordinates[1],anchor_index,5 + box.class_id] = 1.0 # class probability one-hot
+            '''
             boxes.append(box)
 
             new_image = CustomImage.from_tensor(image_tensor=aug_image,file_name=image.file_name,bounding_boxes=boxes,

@@ -8,10 +8,10 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-08 20-07-41/model.pth'
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-09 20-41-38/model.pth'
 N_ANCHORS = 1
 
-CONF_THRESHOLD = 0.01
+CONF_THRESHOLD = 0.1
 CLASS_THESHOLD = 0.8
 IOU_THRESHOLD = 0.4
 
@@ -23,7 +23,6 @@ COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen
 
 # Transformations
 transform = transforms.Compose([
-    
     transforms.ToTensor()
 ])
 
