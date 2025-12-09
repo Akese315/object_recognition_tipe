@@ -149,8 +149,21 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
 
 
 def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
+
+    model.to("cpu")
+
     if not hasattr(model, 'loss_history'):
         model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
+
+    for key, values in model.loss_history.items():
+        clean_values = []
+        for v in values:
+            if isinstance(v, torch.Tensor):
+                # .detach() coupe le gradient, .cpu() déplace sur RAM, .item() convertit en float Python
+                clean_values.append(v.detach().cpu().item())
+            else:
+                clean_values.append(v)
+        model.loss_history[key] = clean_values
     
     clear_output(wait=True)
     plt.figure(figsize=(12, 8))
@@ -165,7 +178,7 @@ def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
     
     # Component Losses
     plot_idx = 2
-    for k in ["coord", "obj", "noobj", "class"]:
+    for k in ["coord", "obj", "noobj", "class","iou"]:
         if k in model.loss_history:
             plt.subplot(2, 3, plot_idx)
             plt.plot(model.loss_history[k], label=f"{k} Loss", color=f"C{plot_idx}")
