@@ -8,12 +8,12 @@ from model import LightweightYOLO
 from utils import find_objects
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-09 20-41-38/model.pth'
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-09 21-32-26/model.pth'
 N_ANCHORS = 1
 
 CONF_THRESHOLD = 0.1
-CLASS_THESHOLD = 0.8
-IOU_THRESHOLD = 0.4
+CLASS_THESHOLD = 0.6
+
 
 CLASSES = ["ball"]
 
@@ -78,7 +78,7 @@ while True:
                 for a in range(A):
                     pred = output[0, i, j, a]
                     if pred[0].item() > CONF_THRESHOLD:
-                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, i, j, W, H)
+                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, W, H)
                         pred_boxes.append(box)
                         
 

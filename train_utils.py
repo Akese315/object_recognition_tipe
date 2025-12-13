@@ -21,7 +21,7 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
     
     running_loss = 0.0
     # On ajoute "iou" aux composants suivis
-    running_components = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0, "iou": 0.0}
+    running_components = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0, "iou": 0.0, "avg_obj": 0.0}
     
     preds, targets = [], []
     start_time = time.time()
@@ -69,7 +69,7 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
                         for indice in indices:
                             input_boxes.append(BoundingBox.from_tensor(
                                 copied_labels[i, indice[0], indice[1], indice[2], :],
-                                N_CLASS, indice[0], indice[1], grid_div_x, grid_div_y
+                                N_CLASS, grid_div_x, grid_div_y
                             ))
 
                         custom_img = CustomImage.from_tensor(
@@ -140,7 +140,6 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
         model.loss_history["total"].append(epoch_loss)
         
         for k, v in epoch_components.items():
-            # Initialisation lazy si une nouvelle clé (comme 'iou') apparaît
             if k not in model.loss_history:
                 model.loss_history[k] = []
             model.loss_history[k].append(v)
@@ -153,7 +152,7 @@ def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
     model.to("cpu")
 
     if not hasattr(model, 'loss_history'):
-        model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": []}  
+        model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": [],"avg_obj": []}  
 
     for key, values in model.loss_history.items():
         clean_values = []
@@ -178,9 +177,9 @@ def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
     
     # Component Losses
     plot_idx = 2
-    for k in ["coord", "obj", "noobj", "class","iou"]:
+    for k in ["coord", "obj", "noobj", "class","iou","avg_obj"]:
         if k in model.loss_history:
-            plt.subplot(2, 3, plot_idx)
+            plt.subplot(3, 3, plot_idx)
             plt.plot(model.loss_history[k], label=f"{k} Loss", color=f"C{plot_idx}")
             plt.title(f"{k} Loss")
             plt.xlabel("Epoch")
@@ -292,6 +291,10 @@ class TrainSettings:
             f.write(f"- **Last Noobj**: {last_noobj}\n")
             last_class = loss_history["class"][-1]
             f.write(f"- **Last Class**: {last_class}\n")
+            last_iou = loss_history["iou"][-1]
+            f.write(f"- **Last IoU**: {last_iou}\n")
+            last_avg_obj = loss_history["avg_obj"][-1]
+            f.write(f"- **Last Avg Obj**: {last_avg_obj}\n")
 
 
     def add_loss_history(self, model:Optional[nn.Module] = None):

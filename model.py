@@ -202,11 +202,13 @@ class YoloLoss(nn.Module):
         ) / num_objects
 
         avg_iou = iou_scores[obj_mask].mean().item() if obj_mask.sum() > 0 else 0.0
+        avg_obj = torch.sigmoid(preds[...,0])[obj_mask].mean().item() if obj_mask.sum() > 0 else 0.0
 
         return total, {
             "coord": loss_coord.item() / num_objects,
             "obj": loss_obj.item() / num_objects,
             "noobj": loss_noobj.item() / num_objects,
             "class": loss_class.item() / num_objects,
-            "iou": avg_iou
+            "iou": avg_iou,
+            "avg_obj": avg_obj
         }
