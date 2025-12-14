@@ -147,52 +147,77 @@ def run_one_epoch(loader, model, loss_fn, optimizer, scheduler, device, N_CLASS,
     return epoch_loss
 
 
-def get_plot_loss(show=True, model:Optional[nn.Module] = None) -> Image:
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
+import torch
+import torch.nn as nn
+from typing import Optional
+from IPython.display import clear_output
 
-    model.to("cpu")
+def get_plot_loss(show=True, model: Optional[nn.Module] = None) -> Image:
+    # ATTENTION : J'ai commenté cette ligne (voir explication plus bas)
+    # model.to("cpu") 
 
     if not hasattr(model, 'loss_history'):
-        model.loss_history = {"total": [], "coord": [], "obj": [], "noobj": [], "class": [],"avg_obj": []}  
+        # Initialisation vide si pas d'historique pour éviter le crash
+        model.loss_history = {} 
 
+    # Nettoyage des données (Tensor -> float)
+    # On travaille sur une copie locale pour ne pas modifier l'attribut du modèle à chaque appel
+    plot_data = {}
     for key, values in model.loss_history.items():
         clean_values = []
         for v in values:
             if isinstance(v, torch.Tensor):
-                # .detach() coupe le gradient, .cpu() déplace sur RAM, .item() convertit en float Python
                 clean_values.append(v.detach().cpu().item())
             else:
                 clean_values.append(v)
-        model.loss_history[key] = clean_values
+        plot_data[key] = clean_values
     
     clear_output(wait=True)
-    plt.figure(figsize=(12, 8))
     
-    # Total Loss
-    plt.subplot(2, 3, 1)
-    plt.plot(model.loss_history["total"], label="Total Loss")
+    # Augmentation de la hauteur (12, 12)
+    plt.figure(figsize=(12, 12)) 
+    
+    # --- 1. Total Loss ---
+    # On passe en grille 3x3 (3 lignes, 3 colonnes)
+    plt.subplot(3, 3, 1) 
+    if "total" in plot_data:
+        plt.plot(plot_data["total"], label="Total Loss")
     plt.title("Total Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
+    plt.grid(True, alpha=0.3) # Ajout d'une grille pour la lisibilité
     
-    # Component Losses
+    # --- 2. Autres Losses ---
+    # Liste des clés à afficher dans l'ordre
+    keys_to_plot = ["coord", "obj", "noobj", "class", "iou", "avg_obj"]
     plot_idx = 2
-    for k in ["coord", "obj", "noobj", "class","iou","avg_obj"]:
-        if k in model.loss_history:
+    
+    for k in keys_to_plot:
+        if k in plot_data:
             plt.subplot(3, 3, plot_idx)
-            plt.plot(model.loss_history[k], label=f"{k} Loss", color=f"C{plot_idx}")
+            # Utilisation de plot_idx pour varier les couleurs automatiquement
+            plt.plot(plot_data[k], label=f"{k} Loss", color=f"C{plot_idx}")
             plt.title(f"{k} Loss")
             plt.xlabel("Epoch")
             plt.legend()
+            plt.grid(True, alpha=0.3)
             plot_idx += 1
             
+    # tight_layout gère automatiquement les espaces entre les subplots
     plt.tight_layout()
+    
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
     img = Image.open(buf)
+    
     if show:
         plt.show() 
+        
     return img
 
 

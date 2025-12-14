@@ -1,7 +1,9 @@
 import torchvision.models
 import torch.nn as nn
 import torch
+from typing import Optional,Tuple
 from utils import batch_IoU
+import numpy as np
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
@@ -14,14 +16,25 @@ class ConvBlock(nn.Module):
         return self.relu(self.bn(self.conv(x)))
     
 class YOLOHead(nn.Module):
-    def __init__(self, num_classes, num_anchors, kernel_size):
+    def __init__(self, num_classes, kernel_size,anchors:torch.Tensor):
         super(YOLOHead, self).__init__()   
         self.num_classes = num_classes
-        self.num_anchors = num_anchors
+        self.anchors = anchors
+        self.num_anchors = self.get_num_anchors()
         self.kernel_size = kernel_size
-        out_channels = num_anchors * (5 + num_classes)
+        self.anchors = anchors
+        out_channels = self.num_anchors * (5 + num_classes)
 
         self.detector = nn.Conv2d(self.kernel_size, out_channels, kernel_size=1)
+        self.tensor_anchors = self.anchors.view(1,1,1,self.num_anchors,2)
+        #de cette facon on a peut directement appliquer un broadcast
+        
+    def get_num_anchors(self):
+        if hasattr(self, 'anchors') and self.anchors is not None:
+            return self.anchors.size(0)
+        else:
+            raise ValueError("Anchors n'est pas défini ou est None. Initialise-le avant d'appeler cette méthode.")
+
 
     def forward(self, x):
         
@@ -35,15 +48,21 @@ class YOLOHead(nn.Module):
         tobj = pred[..., 0]
         tx = pred[..., 1]
         ty = pred[..., 2]
-        tw = pred[..., 3]
-        th = pred[..., 4]
+        tw = pred[...,:, 3]
+        th = pred[...,:, 4]
         tcls = pred[..., 5:]        
 
-        bw = torch.sigmoid(tw) 
-        bh = torch.sigmoid(th) 
+        self.tensor_anchors = self.tensor_anchors.to(x.device)
 
-        bx = torch.sigmoid(tx)
-        by = torch.sigmoid(ty)
+        anchor_w = self.tensor_anchors[..., 0]  # Forme [1, 1, 1, A]
+        anchor_h = self.tensor_anchors[..., 1]  # Forme [1, 1, 1, A]
+
+        #selon yolo v5, la taille sera en fonction des boundings box
+        bw = anchor_w*(2*torch.sigmoid(tw))**2
+        bh = anchor_h*(2*torch.sigmoid(th))**2 
+
+        bx = (2*torch.sigmoid(tx)-0.5)
+        by = (2*torch.sigmoid(ty)-0.5)
 
         # On garde les logits pour l'objectness et les classes (pour BCEWithLogitsLoss)
         obj_score = tobj
@@ -58,12 +77,18 @@ class YOLOHead(nn.Module):
 
     
 class LightweightYOLO(nn.Module):
-    def __init__(self, num_classes=20, num_anchors=3, conv_layer=3,base_kernel_num=32, divider=1):
+    def __init__(self, num_classes=20, conv_layer=3,base_kernel_num=32, divider=1, anchors=None):
         super(LightweightYOLO, self).__init__()
         self.num_classes = num_classes
-        self.num_anchors = num_anchors
         self.reduction_factor = (2**conv_layer) * divider
         self.base_kernel_num = base_kernel_num
+        if anchors is None :
+            raise Exception("No anchors")
+        self.register_buffer('anchors', torch.as_tensor(anchors, dtype=torch.float32), persistent=True)
+        '''self.register_buffer("num_classes",torch.as_tensor(num_classes, dtype=torch.int16))
+        self.register_buffer("conv_layer",torch.as_tensor(conv_layer, dtype=torch.int16))
+        self.register_buffer("base_kernel_num",torch.as_tensor(base_kernel_num, dtype=torch.int16))'''
+        self.num_anchors = self.get_num_anchors()
 
         in_channels = 3
         layers = []
@@ -74,7 +99,13 @@ class LightweightYOLO(nn.Module):
             in_channels = out_channels
             
         self.backbone = nn.Sequential(*layers)
-        self.head = YOLOHead(self.num_classes, self.num_anchors, out_channels)
+        self.head = YOLOHead(self.num_classes, out_channels, self.anchors)
+
+    def get_num_anchors(self):
+        if hasattr(self, 'anchors') and self.anchors is not None:
+            return self.anchors.size(0)
+        else:
+            raise ValueError("Anchors n'est pas défini ou est None. Initialise-le avant d'appeler cette méthode.")
 
     def forward(self, x):
         H, W = x.shape[2], x.shape[3]
@@ -120,13 +151,14 @@ class LightweightYOLO(nn.Module):
         return self.reduction_factor
 
 class YoloLoss(nn.Module):
-    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0, IoU_loss=True):
+    def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0, IoU_loss=True, IoU_threshold=0.5):
         super(YoloLoss, self).__init__()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
         self.lambda_obj = lambda_obj
         self.IoU_loss = IoU_loss
         self.smooth_factor = smooth_factor
+        self.IoU_threshold =IoU_threshold
         
         self.mse = nn.MSELoss(reduction='sum')
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
@@ -168,11 +200,13 @@ class YoloLoss(nn.Module):
             
             # targets est toujours global ici (car on a utilisé t_local plus haut)
             iou_scores = batch_IoU(preds_global, targets).detach().clamp(0, 1)
-
+        
         # --- 4. Loss Objectness ---
         target_obj = torch.zeros_like(preds[..., 0], device=device)
 
-        if self.IoU_loss:
+        avg_obj = torch.sigmoid(preds[...,0])[obj_mask].mean().item() if obj_mask.sum() > 0 else 0.0
+
+        if self.IoU_loss and avg_obj > self.IoU_threshold:
             target_obj[obj_mask] = iou_scores[obj_mask] # On vise l'IoU réelle
         else:
             target_obj[obj_mask] = 1.0 

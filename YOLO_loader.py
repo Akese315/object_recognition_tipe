@@ -321,7 +321,7 @@ class CustomImage:
             y2 = int((coordinates.y_center + coordinates.height / 2)*H)
             objectness = box.get_objectness()
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+            cv2.circle(img, (int(coordinates.x_center*W), int(coordinates.y_center*H)), 5, (255, 0, 0), -1)
             cv2.putText(img, f"{objectness:.2f} {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
 
@@ -341,7 +341,7 @@ class CustomImage:
                     x2 = int((coordinates.x_center + coordinates.width / 2)*W)
                     y2 = int((coordinates.y_center + coordinates.height / 2)*H)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+                    cv2.circle(img, (int(coordinates.x_center*W), int(coordinates.y_center*H)), 5, (255, 0, 0), -1)
                     cv2.putText(img, f"{selected_box.get_objectness():.2f} {selected_box.class_id} p={selected_box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             else:
                 for box in predicted_bb_boxes:
@@ -352,7 +352,7 @@ class CustomImage:
                     x2 = int((coordinates.x_center + coordinates.width / 2)*W)
                     y2 = int((coordinates.y_center + coordinates.height / 2)*H)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.circle(img, (int(coordinates.x_center), int(coordinates.y_center)), 5, (255, 0, 0), -1)
+                    cv2.circle(img, (int(coordinates.x_center*W), int(coordinates.y_center*H)), 5, (255, 0, 0), -1)
                     cv2.putText(img, f"{box.get_objectness():.2f} {box.class_id} p={box.class_id_prob:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
             image = PILImage.fromarray(img)

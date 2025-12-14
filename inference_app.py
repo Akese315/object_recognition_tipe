@@ -6,12 +6,12 @@ from torchvision import transforms
 from YOLO_loader import BoundingBox, CustomImage
 from model import LightweightYOLO
 from utils import find_objects
+import time
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc8-v1_fp32_2025-12-09 21-32-26/model.pth'
-N_ANCHORS = 1
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-14 19-13-52/model.pth'
 
-CONF_THRESHOLD = 0.1
+CONF_THRESHOLD = 0.6
 CLASS_THESHOLD = 0.6
 
 
@@ -26,11 +26,14 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
+state_dict = torch.load(MODEL_PATH, map_location='cpu')
+anchors = state_dict["anchors"]
+
 print("Configuration terminée.")
 # ================= CHARGEMENT MODÈLE =================
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = LightweightYOLO(num_classes=N_CLASS, num_anchors=N_ANCHORS, base_kernel_num=16, conv_layer=3, divider=1)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=False))
+model = LightweightYOLO(num_classes=N_CLASS, base_kernel_num=32, conv_layer=5, divider=1,anchors=anchors)
+model.load_state_dict(state_dict)
 model.to(device)
 model.eval()
 
@@ -45,8 +48,11 @@ if not cap.isOpened():
 
 print("Inférence en temps réel démarrée. Appuie sur 'q' pour quitter.")
 reduction = model.get_reduction_factor()
+
 while True:
     ret, frame = cap.read()
+    process_time_start = time.time()
+    
     if not ret:
         break
 
@@ -89,11 +95,14 @@ while True:
         # Convertir en format OpenCV pour l'afficher (RGB -> BGR)
         res_np = np.array(res_pil)
         res_bgr = cv2.cvtColor(res_np, cv2.COLOR_RGB2BGR)
+        process_time_end = time.time()
+        process_time_interval = process_time_end - process_time_start
 
         cv2.imshow('YOLO Real-time Detection', res_bgr)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+    
 
 cap.release()
 cv2.destroyAllWindows()
