@@ -8,6 +8,7 @@ import io
 from pathlib import Path
 from IPython.display import Image, display
 from PIL import Image as PILImage
+from PIL import ImageOps
 
 class Coordinates:
     def __init__(self, x_center, y_center, width, height):
@@ -202,7 +203,11 @@ class CustomImage:
         if self.is_loaded():
             return self._image_tensor
 
-        image_pil = PILImage.open(self.file_name).convert("RGB")
+        image_pil = PILImage.open(self.file_name)
+
+        image_pil = ImageOps.exif_transpose(image_pil)
+
+        image_pil = image_pil.convert("RGB")
 
         image_tensor = self.to_tensor(image_pil)  # [C, H, W]
         

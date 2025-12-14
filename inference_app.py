@@ -9,9 +9,9 @@ from utils import find_objects
 import time
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-14 19-13-52/model.pth'
+MODEL_PATH = 'ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-14 22-03-32/model.pth'
 
-CONF_THRESHOLD = 0.6
+CONF_THRESHOLD = 0.3
 CLASS_THESHOLD = 0.6
 
 

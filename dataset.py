@@ -153,14 +153,17 @@ class CardRecognitionDataset(Dataset):
         image_tensor = image.get_raw_tensor()
         time_end = time.time()
         #print(f"Time to get raw tensor: {time_end - time_start}")
-        grid_division_x, grid_division_y = image.get_grid_division()
 
         image_np = np.transpose(image_tensor.numpy(), (1, 2, 0)) 
         
         bb_boxes = image.get_bounding_boxes()
         grid_division_x, grid_division_y = image.get_grid_division()
+
+        #création du tenseur de label
         label = torch.zeros(grid_division_y, grid_division_x, len(self.bboxes_ratio), 5 + self.n_classes)
         
+
+        #création du tenseur d'entrée pour l'augmentation
         bb_boxes_yolo_format = []
         bb_boxes_classes = []
         for box in bb_boxes:
@@ -203,27 +206,18 @@ class CardRecognitionDataset(Dataset):
         aug_boxes = augmented['bboxes']
         #reconstruit le tenseur [Objectness, x_center,y_center, width,height,c1,...,cn]
 
-        '''if len(aug_boxes) != len(bb_boxes):
-            print(len(aug_boxes),"/",len(bb_boxes))'''
-
-
         boxes = []
         for i in range(len(aug_boxes)):
             box = bb_boxes[i]
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
             x_center,y_center,width,height =torch.tensor(aug_boxes[i])
             box = BoundingBox(True,x_center,y_center,width,height,box.class_id,box.num_classes)
-            #box.set_center_cell(grid_division_x,grid_division_y)
             new_coordinates = box.get_cell_position(grid_division_x, grid_division_y)
             anchor_index = box.get_bounding_box_index(self.bboxes_ratio)
             
             #need to set objectness to 1 and class probabilities to one-hot encoding
 
             label[new_coordinates[0],new_coordinates[1],anchor_index] = box.get_tensor()
-            '''label[new_coordinates[0],new_coordinates[1],anchor_index,0] = 1.0 # objectness
-            label[new_coordinates[0],new_coordinates[1],anchor_index,1:5] = torch.tensor(aug_boxes[i])
-            label[new_coordinates[0],new_coordinates[1],anchor_index,5 + box.class_id] = 1.0 # class probability one-hot
-            '''
             boxes.append(box)
 
             new_image = CustomImage.from_tensor(image_tensor=aug_image,file_name=image.file_name,bounding_boxes=boxes,
