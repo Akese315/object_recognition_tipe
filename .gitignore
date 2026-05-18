@@ -3,4 +3,9 @@ dataset/
 dataset_yolo_format/
 .venv
 face_dataset/
+fruit-detection-dataset/
+ball_dataset_2/
+ball_dataset/
+bird/
+Pingpong_dataset/
 model/

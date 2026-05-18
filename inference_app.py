@@ -9,13 +9,14 @@ from utils import find_objects
 import time
 
 # ================= CONFIGURATION =================
-MODEL_PATH = 'ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-14 22-03-32/model.pth'
+MODEL_PATH = 'face_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36/model.pth'
+#MODEL_PATH = 'ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth'
 
-CONF_THRESHOLD = 0.3
-CLASS_THESHOLD = 0.6
+CONF_THRESHOLD = 0.5
+CLASS_THESHOLD = 0.9
 
 
-CLASSES = ["ball"]
+CLASSES = ["face"]
 
 N_CLASS = len(CLASSES)
 COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen
@@ -79,14 +80,17 @@ while True:
         B, H, W, A, S = output.shape
         pred_boxes = []
         
-        for i in range(H):
-            for j in range(W):
-                for a in range(A):
-                    pred = output[0, i, j, a]
-                    if pred[0].item() > CONF_THRESHOLD:
-                        box = BoundingBox.from_tensor(pred.cpu(), N_CLASS, W, H)
-                        pred_boxes.append(box)
+        torch.max(output[0, ..., 0], dim=2)
                         
+        mask = output[0, ..., 0] > CONF_THRESHOLD
+
+
+        valid_preds = output[0][mask]
+        class_scores = valid_preds[:, 5:]
+        max_class_scores, _ = torch.max(class_scores, dim=1)
+        valid_preds = valid_preds[max_class_scores > CLASS_THESHOLD]
+        
+        pred_boxes = [BoundingBox.from_tensor(pred.cpu(), N_CLASS, W, H) for pred in valid_preds]
 
         print(f"Détections brutes : {len(pred_boxes)}")
         
@@ -97,6 +101,18 @@ while True:
         res_bgr = cv2.cvtColor(res_np, cv2.COLOR_RGB2BGR)
         process_time_end = time.time()
         process_time_interval = process_time_end - process_time_start
+        fps_text = f"FPS: {1.0 / process_time_interval:.2f}"
+
+        cv2.putText(
+            img=res_bgr,
+            text=fps_text,
+            org=(10, 50),             # Position (x, y) en pixels (coin haut gauche)
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=1,              # Taille de la police
+            color=(0, 255, 0),        # Couleur (B, G, R) -> Ici Vert
+            thickness=2,              # Épaisseur du trait
+            lineType=cv2.LINE_AA      # Anti-aliasing pour un texte plus net
+        )
 
         cv2.imshow('YOLO Real-time Detection', res_bgr)
 

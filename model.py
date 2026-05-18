@@ -16,8 +16,9 @@ class ConvBlock(nn.Module):
         return self.relu(self.bn(self.conv(x)))
     
 class YOLOHead(nn.Module):
-    def __init__(self, num_classes, kernel_size,anchors:torch.Tensor):
+    def __init__(self, num_classes, kernel_size,anchors:torch.Tensor, quantize=False):
         super(YOLOHead, self).__init__()   
+        self.quantize = quantize
         self.num_classes = num_classes
         self.anchors = anchors
         self.num_anchors = self.get_num_anchors()
@@ -27,6 +28,9 @@ class YOLOHead(nn.Module):
 
         self.detector = nn.Conv2d(self.kernel_size, out_channels, kernel_size=1)
         self.tensor_anchors = self.anchors.view(1,1,1,self.num_anchors,2)
+        
+        if self.quantize:
+             self.dequant = torch.quantization.DeQuantStub()
         #de cette facon on a peut directement appliquer un broadcast
         
     def get_num_anchors(self):
@@ -41,6 +45,10 @@ class YOLOHead(nn.Module):
         B, _, H, W = x.shape
 
         pred = self.detector(x)
+        
+        if self.quantize:
+            pred = self.dequant(pred)
+            
         pred = pred.permute(0, 2, 3, 1).contiguous()
         pred = pred.view(B, H, W, self.num_anchors, 5 + self.num_classes)
 
@@ -77,8 +85,11 @@ class YOLOHead(nn.Module):
 
     
 class LightweightYOLO(nn.Module):
-    def __init__(self, num_classes=20, conv_layer=3,base_kernel_num=32, divider=1, anchors=None):
+    def __init__(self, num_classes=20, conv_layer=3,base_kernel_num=32, divider=1, anchors=None, quantize=False):
         super(LightweightYOLO, self).__init__()
+        self.quantize = quantize
+        if self.quantize:
+            self.quant = torch.quantization.QuantStub()
         self.num_classes = num_classes
         self.reduction_factor = (2**conv_layer) * divider
         self.base_kernel_num = base_kernel_num
@@ -99,7 +110,7 @@ class LightweightYOLO(nn.Module):
             in_channels = out_channels
             
         self.backbone = nn.Sequential(*layers)
-        self.head = YOLOHead(self.num_classes, out_channels, self.anchors)
+        self.head = YOLOHead(self.num_classes, out_channels, self.anchors, quantize=quantize)
 
     def get_num_anchors(self):
         if hasattr(self, 'anchors') and self.anchors is not None:
@@ -108,6 +119,9 @@ class LightweightYOLO(nn.Module):
             raise ValueError("Anchors n'est pas défini ou est None. Initialise-le avant d'appeler cette méthode.")
 
     def forward(self, x):
+        if self.quantize:
+            x = self.quant(x)
+            
         H, W = x.shape[2], x.shape[3]
 
         # Redimensionnement dynamique silencieux si nécessaire
@@ -149,6 +163,12 @@ class LightweightYOLO(nn.Module):
 
     def get_reduction_factor(self):
         return self.reduction_factor
+
+    def fuse_model(self):
+        for m in self.modules():
+            if isinstance(m, ConvBlock):
+                torch.quantization.fuse_modules(m, [['conv', 'bn', 'relu']], inplace=True)  
+            
 
 class YoloLoss(nn.Module):
     def __init__(self, lambda_coord=5.0, lambda_noobj=0.5, lambda_obj=1.0, smooth_factor=0.0, IoU_loss=True, IoU_threshold=0.5):

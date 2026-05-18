@@ -1,4 +1,5 @@
 import torch
+import copy
 import os
 import datetime
 from typing import Optional
@@ -237,7 +238,11 @@ class TrainSettings:
         self.optimizer = optimizer
         self.loss_fn = loss_fn
 
-    def create_experiment_folder(self, model, base_dir="experiments"):
+    def quantize(self, model: LightweightYOLO):
+        model.fuse_model()
+        
+
+    def create_experiment_folder(self, model, base_dir="experiments", calibration_loader=None):
         # Get reduction factor from model or settings
         if hasattr(model, 'get_reduction_factor'):
             rf = model.get_reduction_factor()
@@ -267,6 +272,8 @@ class TrainSettings:
         torch.save(model.state_dict(), model_save_path)
 
         summary_path = os.path.join(self.model_dir, "summary.md")
+
+
         
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(f"# Experiment Summary - {os.path.basename(self.model_dir)}\n\n")
@@ -294,6 +301,43 @@ class TrainSettings:
                 f.write(f"- **Smooth Factor**: {self.loss_fn.smooth_factor}\n")
             else:
                 f.write("- **Loss Function**: None\n")
+                
+            if calibration_loader:
+                try:
+                    f.write("\n## Quantization\n")
+                    f.write("Quantization process started...\n")
+                    
+                    # 1. Préparation du modèle pour la quantization
+                    model_to_quantize = copy.deepcopy(model)
+                    model_to_quantize.eval()
+                    model_to_quantize.to('cpu')
+                    
+                    # 2. Fusion des modules
+                    model_to_quantize.fuse_model()
+                    
+                    # 3. Configuration de la quantization
+                    model_to_quantize.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+                    torch.quantization.prepare(model_to_quantize, inplace=True)
+                    
+                    # 4. Calibration
+                    print("Calibration in progress...")
+                    with torch.no_grad():
+                        for images, _ in calibration_loader:
+                            model_to_quantize(images)
+                            break # On calibrer sur un batch pour l'instant (ou plus si besoin)
+                            
+                    # 5. Conversion
+                    torch.quantization.convert(model_to_quantize, inplace=True)
+                    
+                    # 6. Sauvegarde
+                    quantized_model_path = os.path.join(self.model_dir, "model_quantized.pth")
+                    torch.save(model_to_quantize.state_dict(), quantized_model_path)
+                    f.write(f"- **Quantized Model**: Saved to {os.path.basename(quantized_model_path)}\n")
+                    print(f"Quantized model saved to {quantized_model_path}")
+
+                except Exception as e:
+                    f.write(f"- **Quantization Error**: {str(e)}\n")
+                    print(f"Quantization failed: {e}")
                 
             if self.optimizer:
                 f.write(f"- **Optimizer**: {self.optimizer}\n")

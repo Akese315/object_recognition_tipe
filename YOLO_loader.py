@@ -219,18 +219,38 @@ class CustomImage:
             self._image_tensor = image_tensor
         return image_tensor
 
-    def _apply_letterbox(self,image_tensor):
+    def _apply_letterbox(self, image_tensor):
+        C, H, W = image_tensor.shape
+        target_W, target_H = self.resized_size
 
-        W,H = image_tensor.size(2),image_tensor.size(1)
-        if (W,H) == self.resized_size:
-            return image_tensor
+        scale = min(target_W / W, target_H / H)
+        new_W = int(W * scale)
+        new_H = int(H * scale)
 
-        image_tensor = self.resize_image(self.resized_size,image_tensor=image_tensor)
-        if image_tensor is None:
-            raise Exception("Image_tensor is none after resize : file_name :",self)
-        
-        return image_tensor
+        # resize en gardant le ratio
+        image = torch.nn.functional.interpolate(
+            image_tensor.unsqueeze(0),
+            size=(new_H, new_W),
+            mode="bilinear",
+            align_corners=False
+        ).squeeze(0)
 
+        # padding
+        pad_W = target_W - new_W
+        pad_H = target_H - new_H
+
+        pad_left   = pad_W // 2
+        pad_right  = pad_W - pad_left
+        pad_top    = pad_H // 2
+        pad_bottom = pad_H - pad_top
+
+        image = torch.nn.functional.pad(
+            image,
+            (pad_left, pad_right, pad_top, pad_bottom),
+            value=0.0  # ou mean pixel
+        )
+            
+        return image
     def set_std_mean(self, std: list[float], mean: list[float]):
         self._std = std
         self._mean = mean
@@ -310,6 +330,7 @@ class CustomImage:
         display(Image(data=buf.getvalue()))
 
     def get_image(self, predicted_bb_boxes: list[BoundingBox] = None, objectness_strict: bool = True)->PILImage:
+
         image_tensor = self.get_raw_tensor()
 
         img = (image_tensor.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8)

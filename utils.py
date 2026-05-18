@@ -115,3 +115,27 @@ def find_objects(tensor, threshold=1.0):
     coordinates = torch.nonzero(mask, as_tuple=False)
     return coordinates  
 
+
+def clamp(value, min_value, max_value):
+    return max(min(value, max_value), min_value)
+
+def calculate_area(box:BoundingBox):
+    return box.width*box.height
+
+def calculate_z_position(y_center,camera_angle):
+    return y_center/np.tan(camera_angle)
+
+def get_x_reel(x,z,hpov):
+    return 2*x*z*np.tan(hpov/2)
+
+def get_y_reel(y,z,vpov):
+    return 2*y*z*np.tan(vpov/2)
+
+def get_z_range(camera_angle, HPOV, VPOV, camera_height):
+    z_max = camera_height/np.tan(camera_angle+VPOV/2)
+    z_min = camera_height/np.tan(camera_angle-VPOV/2)
+    return (z_min,z_max)
+
+def get_z_reel(y,camera_angle, HPOV, VPOV, camera_height):
+    z_min,z_max = get_z_range(camera_angle, HPOV, VPOV, camera_height)
+    return y
