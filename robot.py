@@ -382,10 +382,12 @@ class Robot:
                 # Convert back to a relative angle (subtract origin) and store in radians
                 relative_deg = clamped_physical_deg - self.arms[arm_idx].origin
 
-# End of angle update block
+                # End of angle update block
                 angles[arm_idx] = math.radians(relative_deg)
                 logging.debug(f"Arm {arm_idx}: delta={math.degrees(angle_delta):.4f}°")
-                logging.debug(f"new={new_angle_deg:.4f}°, clamped={clamped_physical_deg:.4f}°")
+                logging.debug(
+                    f"new={new_angle_deg:.4f}°, clamped={clamped_physical_deg:.4f}°"
+                )
 
         # Final end‑effector position for debugging (optional)
         final_pos = self.calculate_absolute_arm_position(N - 1, angles)

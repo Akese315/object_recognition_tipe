@@ -16,11 +16,13 @@ from utils import calculate_area, find_objects, get_x_reel, get_y_reel, get_z_re
 from YOLO_loader import BoundingBox, CustomImage
 
 rbt = robot.Robot("COM3")
-rbt.add_arm(1, 180, "y", 90, 270, np.array([0.035, 0, 0]))
-rbt.add_arm(2, 180, "z", 90, 270, np.array([0, 0.09, 0]))
-rbt.add_arm(3, 90, "z", 90, 270, np.array([0, 0.115, 0]))
-rbt.add_arm(4, 180, "z", 90, 270, np.array([0, 0.135, 0]))
-rbt.add_arm(5, 0, "y", 0, 180, np.array([0, 0.15, 0]))
+
+async def init_robot():
+    await rbt.add_arm(1, 180, "y", 90, 270, np.array([0.035, 0, 0]))
+    await rbt.add_arm(2, 180, "z", 90, 270, np.array([0, 0.09, 0]))
+    await rbt.add_arm(3, 90, "z", 90, 270, np.array([0, 0.115, 0]))
+    await rbt.add_arm(4, 180, "z", 90, 270, np.array([0, 0.135, 0]))
+    await rbt.add_arm(5, 0, "y", 0, 180, np.array([0, 0.15, 0]))
 
 USERS = set()
 
