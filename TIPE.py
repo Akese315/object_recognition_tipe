@@ -47,10 +47,11 @@ async def broadcast_loop():
         calculated_angles = rbt.calculate_angles_CDD(x, y, z, 20)
         calculated_angles = [math.degrees(angle) for angle in calculated_angles]
         event = json.dumps({"event_type": "joint_angles", "value": calculated_angles})
-        await broadcast(USERS, event)
+        broadcast(USERS, event)
 
 
 async def main():
+    await init_robot()
     async with serve(handler, "localhost", 5678):
         print("listening")
         await asyncio.gather(broadcast_loop())
