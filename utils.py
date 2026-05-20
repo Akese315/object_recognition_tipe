@@ -136,6 +136,9 @@ def get_z_range(camera_angle, HPOV, VPOV, camera_height):
     z_min = camera_height/np.tan(camera_angle-VPOV/2)
     return (z_min,z_max)
 
-def get_z_reel(y,camera_angle, HPOV, VPOV, camera_height):
-    z_min,z_max = get_z_range(camera_angle, HPOV, VPOV, camera_height)
-    return y
+def get_z_reel(y, camera_angle, HPOV, VPOV, camera_height):
+    # Compute depth from vertical position using camera angle
+    z = calculate_z_position(y, camera_angle)
+    z_min, z_max = get_z_range(camera_angle, HPOV, VPOV, camera_height)
+    # Clamp z within realistic bounds
+    return max(min(z, z_max), z_min)

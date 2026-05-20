@@ -1,0 +1,5 @@
+pip install feetech-servo-sdk
+pip install opencv-python
+pip3 install torch torchvision
+pip install ipython
+pip install websockets
