@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 server.py
----------
+----------
 
 Capture two video streams (camera IDs 0 and 1) with OpenCV and send each
 stream over a separate TCP socket.
@@ -28,89 +28,161 @@ import struct
 import threading
 import cv2
 import sys
+import logging
+import ssl
+from typing import Optional
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # Configuration
-# --------------------------------------------------------------------------- #
-CAMERA_IDS = (0, 1)          # IDs passed to cv2.VideoCapture
-PORTS      = (8000, 8001)    # Listening ports – one per camera
-HOST       = ""              # Bind to all interfaces
-JPEG_QUALITY = 90            # JPEG compression quality (0‑100)
+# ---------------------------------------------------------------------------
+CAMERA_IDS = (0, 1)               # IDs passed to cv2.VideoCapture
+PORTS = (8000, 8001)               # Listening ports – one per camera
+HOST = "127.0.0.1"                # Bind to localhost by default (configurable)
+MAX_FRAME_SIZE = 2 * 1024 * 1024   # 2 MiB – safety limit for incoming frames
+JPEG_QUALITY = 90                  # JPEG compression quality (0‑100)
+SOCKET_TIMEOUT = 5.0               # Seconds for socket operations
 
-# --------------------------------------------------------------------------- #
+# TLS configuration – set TLS_ENABLED to True and provide certificate files
+TLS_ENABLED = False                # Enable TLS for the data channel?
+TLS_CERT: Optional[str] = None      # Path to server certificate (PEM)
+TLS_KEY: Optional[str] = None       # Path to private key (PEM)
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("server")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(message)s",
+    stream=sys.stderr,
+)
+
+# ---------------------------------------------------------------------------
 # Worker that handles a single camera / socket pair
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+def _create_ssl_context() -> Optional[ssl.SSLContext]:
+    """Create an SSL context if TLS is enabled.
+
+    Returns ``None`` when TLS is disabled so calling code can skip wrapping.
+    """
+    if not TLS_ENABLED:
+        return None
+    if not TLS_CERT or not TLS_KEY:
+        logger.error("TLS is enabled but certificate/key paths are not set.")
+        return None
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.load_cert_chain(certfile=TLS_CERT, keyfile=TLS_KEY)
+    return ctx
+
+
 def camera_worker(cam_id: int, port: int, stop_event: threading.Event) -> None:
-    """Capture frames from ``cam_id`` and stream them on TCP ``port``."""
-    # Initialise camera
+    """Capture frames from ``cam_id`` and stream them on TCP ``port``.
+
+    The function runs in its own thread and continues serving new clients
+    until ``stop_event`` is set.
+    """
     cap = cv2.VideoCapture(cam_id)
     if not cap.isOpened():
-        sys.stderr.write(f"[ERROR] Cannot open camera {cam_id}\n")
+        logger.error("Cannot open camera %s", cam_id)
         return
 
-    # Initialise listening socket
+    # -------------------------------------------------------------------
+    # Prepare listening socket (optionally wrapped with TLS)
+    # -------------------------------------------------------------------
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_sock.bind((HOST, port))
+    try:
+        server_sock.bind((HOST, port))
+    except OSError as exc:
+        logger.error("Failed to bind to %s:%s – %s", HOST, port, exc)
+        cap.release()
+        return
     server_sock.listen(1)
-    sys.stdout.write(f"[INFO] Camera {cam_id} listening on port {port}\n")
+    server_sock.settimeout(1.0)  # allow periodic stop checks
+    logger.info("Camera %s listening on %s:%s", cam_id, HOST, port)
 
-    conn = None
+    ssl_ctx = _create_ssl_context()
+
+    conn: Optional[socket.socket] = None
     try:
         while not stop_event.is_set():
-            # --------------------------------------------------------------- #
-            # Accept a client (blocking). If a stop is requested, break out.
-            # --------------------------------------------------------------- #
+            # -----------------------------------------------------------
+            # Accept a new client connection (with timeout to check stop_event)
+            # -----------------------------------------------------------
             try:
-                server_sock.settimeout(1.0)          # allow periodic stop check
                 conn, addr = server_sock.accept()
-                sys.stdout.write(f"[INFO] Client {addr} connected to camera {cam_id}\n")
+                logger.info("Client %s connected to camera %s", addr, cam_id)
+                # Apply TLS after the TCP handshake if requested
+                if ssl_ctx:
+                    try:
+                        conn = ssl_ctx.wrap_socket(conn, server_side=True)
+                        logger.info("TLS handshake successful for %s", addr)
+                    except ssl.SSLError as e:
+                        logger.error("TLS handshake failed for %s – %s", addr, e)
+                        conn.close()
+                        conn = None
+                        continue
+                conn.settimeout(SOCKET_TIMEOUT)
             except socket.timeout:
                 continue  # loop again to check stop_event
-            except OSError:
-                break  # socket closed elsewhere
+            except OSError as exc:
+                logger.error("Accept failed on port %s – %s", port, exc)
+                break
 
-            # --------------------------------------------------------------- #
-            # Send frames until the client disconnects or a stop is requested.
-            # --------------------------------------------------------------- #
+            # -----------------------------------------------------------
+            # Stream frames until the client disconnects or we are stopped
+            # -----------------------------------------------------------
             try:
                 while not stop_event.is_set():
                     ret, frame = cap.read()
                     if not ret:
+                        logger.debug("Failed to read frame from camera %s", cam_id)
                         continue
 
-                    # Encode as JPEG
                     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
                     ok, encimg = cv2.imencode('.jpg', frame, encode_param)
                     if not ok:
+                        logger.debug("JPEG encoding failed for camera %s", cam_id)
                         continue
 
                     data = encimg.tobytes()
-                    length = struct.pack('>I', len(data))
+                    if len(data) > MAX_FRAME_SIZE:
+                        logger.error(
+                            "Frame size %s exceeds maximum of %s bytes – closing connection",
+                            len(data),
+                            MAX_FRAME_SIZE,
+                        )
+                        break
 
-                    # Send length + payload; use sendall to guarantee delivery
-                    conn.sendall(length + data)
-            except (socket.error, ConnectionResetError, BrokenPipeError):
-                sys.stdout.write(f"[WARN] Client {addr} disconnected from camera {cam_id}\n")
+                    length = struct.pack('>I', len(data))
+                    try:
+                        conn.sendall(length + data)
+                    except (socket.error, BrokenPipeError) as e:
+                        logger.warning("Send error to %s – %s", addr, e)
+                        break
+            except (socket.timeout, socket.error) as e:
+                logger.warning("Connection to %s lost – %s", addr, e)
             finally:
                 if conn:
+                    try:
+                        conn.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
                     conn.close()
                     conn = None
+                    logger.info("Client %s disconnected from camera %s", addr, cam_id)
     finally:
-        # ------------------------------------------------------------------- #
-        # Cleanup resources
-        # ------------------------------------------------------------------- #
         cap.release()
         server_sock.close()
-        sys.stdout.write(f"[INFO] Camera {cam_id} on port {port} shut down.\n")
+        logger.info("Camera %s on port %s shut down.", cam_id, port)
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # Main entry point – start two threads, one per camera/port pair
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 def main() -> None:
     stop_event = threading.Event()
-    threads = []
+    threads: list[threading.Thread] = []
 
     for cam_id, port in zip(CAMERA_IDS, PORTS):
         t = threading.Thread(
@@ -123,18 +195,16 @@ def main() -> None:
         threads.append(t)
 
     try:
-        # Wait for KeyboardInterrupt
         while any(t.is_alive() for t in threads):
             for t in threads:
                 t.join(timeout=0.5)
     except KeyboardInterrupt:
-        sys.stdout.write("\n[INFO] KeyboardInterrupt received – shutting down...\n")
+        logger.info("KeyboardInterrupt received – shutting down...")
         stop_event.set()
-        # Give workers a moment to exit cleanly
         for t in threads:
             t.join()
 
-    sys.stdout.write("[INFO] Server terminated.\n")
+    logger.info("Server terminated.")
 
 
 if __name__ == "__main__":
