@@ -15,28 +15,29 @@ Usage
     $ python client.py   # defaults to localhost, ports 8000/8001
 """
 
+import logging
 import socket
+import ssl
 import struct
+import sys
 import time
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
-import sys
-import logging
-import ssl
-from typing import Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-HOST = "127.0.0.1"                # Server address – change as needed
-PORTS = (8000, 8001)                # Must match the server ports
-RECONNECT_DELAY = 2.0               # Seconds between reconnection attempts
-SOCKET_TIMEOUT = 5.0                # Seconds for socket operations
-MAX_FRAME_SIZE = 2 * 1024 * 1024    # 2 MiB – sanity check on incoming frames
+HOST = "192.168.1.68"  # Server address – change as needed
+PORTS = (8000, 8001)  # Must match the server ports
+RECONNECT_DELAY = 2.0  # Seconds between reconnection attempts
+SOCKET_TIMEOUT = 5.0  # Seconds for socket operations
+MAX_FRAME_SIZE = 2 * 1024 * 1024  # 2 MiB – sanity check on incoming frames
 
 # TLS configuration – enable when server uses TLS
-TLS_ENABLED = False                 # Set to True to use TLS
-TLS_CERT: Optional[str] = None       # Path to CA bundle or server cert for verification
+TLS_ENABLED = False  # Set to True to use TLS
+TLS_CERT: Optional[str] = None  # Path to CA bundle or server cert for verification
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -47,6 +48,7 @@ logging.basicConfig(
     format="[%(levelname)s] %(message)s",
     stream=sys.stderr,
 )
+
 
 # ---------------------------------------------------------------------------
 # Helper: receive exactly *n* bytes from a socket
@@ -67,6 +69,7 @@ def recvall(sock: socket.socket, n: int) -> bytes:
         data.extend(packet)
     return bytes(data)
 
+
 # ---------------------------------------------------------------------------
 # Helper: create SSL context if TLS is enabled
 # ---------------------------------------------------------------------------
@@ -80,6 +83,7 @@ def _create_ssl_context() -> Optional[ssl.SSLContext]:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
 
 # ---------------------------------------------------------------------------
 # Helper: establish a connection (with retry) and optional TLS wrapping
@@ -109,9 +113,15 @@ def connect_with_retry(port: int) -> socket.socket:
             logger.info("Connected to %s:%s", HOST, port)
             return sock
         except (OSError, ConnectionRefusedError) as e:
-            logger.warning("Cannot connect to %s:%s – %s. Retrying in %.1fs...",
-                           HOST, port, e, RECONNECT_DELAY)
+            logger.warning(
+                "Cannot connect to %s:%s – %s. Retrying in %.1fs...",
+                HOST,
+                port,
+                e,
+                RECONNECT_DELAY,
+            )
             time.sleep(RECONNECT_DELAY)
+
 
 # ---------------------------------------------------------------------------
 # Main loop – receive, decode, and display frames
@@ -131,9 +141,11 @@ def main() -> None:
                 try:
                     # 1️⃣ read 4‑byte length
                     raw_len = recvall(sock, 4)
-                    (msg_len,) = struct.unpack('>I', raw_len)
+                    (msg_len,) = struct.unpack(">I", raw_len)
                     if msg_len > MAX_FRAME_SIZE:
-                        raise ValueError(f"Frame size {msg_len} exceeds limit of {MAX_FRAME_SIZE} bytes")
+                        raise ValueError(
+                            f"Frame size {msg_len} exceeds limit of {MAX_FRAME_SIZE} bytes"
+                        )
 
                     # 2️⃣ read the JPEG payload
                     jpeg_data = recvall(sock, msg_len)
@@ -162,13 +174,15 @@ def main() -> None:
 
             # Resize to same height if needed (optional)
             h_min = min(f.shape[0] for f in frames)
-            resized = [cv2.resize(f, (int(f.shape[1] * h_min / f.shape[0]), h_min))
-                       for f in frames]
+            resized = [
+                cv2.resize(f, (int(f.shape[1] * h_min / f.shape[0]), h_min))
+                for f in frames
+            ]
 
             combined = np.hstack(resized)
             cv2.imshow("Jetson Streams (press 'q' to quit)", combined)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 logger.info("'q' pressed – exiting.")
                 break
     except KeyboardInterrupt:

@@ -37,7 +37,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 CAMERA_IDS = (0, 1)               # IDs passed to cv2.VideoCapture
 PORTS = (8000, 8001)               # Listening ports – one per camera
-HOST = "127.0.0.1"                # Bind to localhost by default (configurable)
+HOST = "0.0.0.0"                # Bind to all interfaces by default (configurable)
 MAX_FRAME_SIZE = 2 * 1024 * 1024   # 2 MiB – safety limit for incoming frames
 JPEG_QUALITY = 90                  # JPEG compression quality (0‑100)
 SOCKET_TIMEOUT = 5.0               # Seconds for socket operations
