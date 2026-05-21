@@ -46,7 +46,7 @@ class Camera:
 
     def open(self):
         pipeline = gstreamer_pipeline(self.sensor_id)
-            self.cap = cv2.VideoCapture(pipeline)
+        self.cap = cv2.VideoCapture(pipeline)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # ← ICI
         if not self.cap.isOpened():
             logger.error("Camera %s open failed", self.sensor_id)
