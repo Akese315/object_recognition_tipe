@@ -78,30 +78,15 @@ def _create_ssl_context() -> Optional[ssl.SSLContext]:
     return ctx
 
 
-def gstreamer_pipeline(
-    sensor_id: int,
-    capture_width=1280,
-    capture_height=720,
-    display_width=1280,
-    display_height=720,
-    framerate=30,
-    flip_method=0,
-):
-
+def gstreamer_pipeline(sensor_id: int):
     return (
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
-        f"video/x-raw(memory:NVMM), "
-        f"width=(int){capture_width}, "
-        f"height=(int){capture_height}, "
-        f"format=(string)NV12, "
-        f"framerate=(fraction){framerate}/1 ! "
-        f"nvvidconv flip-method={flip_method} ! "
-        f"video/x-raw, "
-        f"width=(int){display_width}, "
-        f"height=(int){display_height}, "
-        f"format=(string)BGRx ! "
+        f"video/x-raw(memory:NVMM), width=1280, height=720, framerate=30/1 ! "
+        f"nvvidconv ! "
+        f"video/x-raw, format=BGRx ! "
         f"videoconvert ! "
-        f"video/x-raw, format=(string)BGR ! appsink"
+        f"video/x-raw, format=BGR ! "
+        f"appsink drop=true max-buffers=1 sync=false"
     )
 
 
