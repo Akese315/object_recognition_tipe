@@ -26,11 +26,11 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
 # ---------------------------------------------------------------------------
-def gstreamer_pipeline(sensor_id: int):
+def gstreamer_pipeline(sensor_id: int) -> str:
     return (
-        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"nvarguscamerasrc sensor-id={sensor_id} sensor-mode=3 ! "  # mode 3 = 1280x720@120fps, or use 0 for full res
         f"video/x-raw(memory:NVMM), width=1280, height=720, framerate=30/1 ! "
-        f"nvvidconv ! "
+        f"nvvidconv flip-method=0 ! "
         f"video/x-raw, format=BGRx ! "
         f"videoconvert ! "
         f"video/x-raw, format=BGR ! "
@@ -45,18 +45,11 @@ class Camera:
         self.open()
 
     def open(self):
-        # Try GStreamer pipeline first
         pipeline = gstreamer_pipeline(self.sensor_id)
-        self.cap = cv2.VideoCapture(pipeline)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # reduce latency
+            self.cap = cv2.VideoCapture(pipeline)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # ← ICI
         if not self.cap.isOpened():
-            # Fallback to simple device index (works when /dev/videoX is present)
-            logger.warning("GStreamer pipeline failed for camera %s, trying /dev/video%d", self.sensor_id, self.sensor_id)
-            self.cap = cv2.VideoCapture(self.sensor_id)
-            if not self.cap.isOpened():
-                logger.error("Camera %s open failed (both pipeline and index)", self.sensor_id)
-            else:
-                logger.info("Camera %s opened via device index.", self.sensor_id)
+            logger.error("Camera %s open failed", self.sensor_id)
 
     def read(self):
         if self.cap is None or not self.cap.isOpened():
