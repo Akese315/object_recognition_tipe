@@ -23,29 +23,31 @@ Usage
     $ python server.py
 """
 
-import socket
-import struct
-import threading
-import cv2
-import sys
 import logging
+import socket
 import ssl
+import struct
+import sys
+import threading
+import time
 from typing import Optional
+
+import cv2
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CAMERA_IDS = (0, 1)               # IDs passed to cv2.VideoCapture
-PORTS = (8000, 8001)               # Listening ports – one per camera
-HOST = "0.0.0.0"                # Bind to all interfaces by default (configurable)
-MAX_FRAME_SIZE = 2 * 1024 * 1024   # 2 MiB – safety limit for incoming frames
-JPEG_QUALITY = 90                  # JPEG compression quality (0‑100)
-SOCKET_TIMEOUT = 5.0               # Seconds for socket operations
+CAMERA_IDS = (0, 1)  # IDs passed to cv2.VideoCapture
+PORTS = (8000, 8001)  # Listening ports – one per camera
+HOST = "0.0.0.0"  # Bind to all interfaces by default (configurable)
+MAX_FRAME_SIZE = 2 * 1024 * 1024  # 2 MiB – safety limit for incoming frames
+JPEG_QUALITY = 90  # JPEG compression quality (0‑100)
+SOCKET_TIMEOUT = 5.0  # Seconds for socket operations
 
 # TLS configuration – set TLS_ENABLED to True and provide certificate files
-TLS_ENABLED = False                # Enable TLS for the data channel?
-TLS_CERT: Optional[str] = None      # Path to server certificate (PEM)
-TLS_KEY: Optional[str] = None       # Path to private key (PEM)
+TLS_ENABLED = False  # Enable TLS for the data channel?
+TLS_CERT: Optional[str] = None  # Path to server certificate (PEM)
+TLS_KEY: Optional[str] = None  # Path to private key (PEM)
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -56,6 +58,7 @@ logging.basicConfig(
     format="[%(levelname)s] %(message)s",
     stream=sys.stderr,
 )
+
 
 # ---------------------------------------------------------------------------
 # Worker that handles a single camera / socket pair
@@ -75,13 +78,44 @@ def _create_ssl_context() -> Optional[ssl.SSLContext]:
     return ctx
 
 
+def gstreamer_pipeline(
+    sensor_id: int,
+    capture_width=1280,
+    capture_height=720,
+    display_width=1280,
+    display_height=720,
+    framerate=30,
+    flip_method=0,
+):
+
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), "
+        f"width=(int){capture_width}, "
+        f"height=(int){capture_height}, "
+        f"format=(string)NV12, "
+        f"framerate=(fraction){framerate}/1 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        f"video/x-raw, "
+        f"width=(int){display_width}, "
+        f"height=(int){display_height}, "
+        f"format=(string)BGRx ! "
+        f"videoconvert ! "
+        f"video/x-raw, format=(string)BGR ! appsink"
+    )
+
+
 def camera_worker(cam_id: int, port: int, stop_event: threading.Event) -> None:
     """Capture frames from ``cam_id`` and stream them on TCP ``port``.
 
     The function runs in its own thread and continues serving new clients
     until ``stop_event`` is set.
     """
-    cap = cv2.VideoCapture(cam_id)
+    pipeline = gstreamer_pipeline(cam_id)
+
+    cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    logger.info("Using pipeline: %s", pipeline)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
         logger.error("Cannot open camera %s", cam_id)
         return
@@ -134,13 +168,48 @@ def camera_worker(cam_id: int, port: int, stop_event: threading.Event) -> None:
             # -----------------------------------------------------------
             try:
                 while not stop_event.is_set():
+                    # Initialize failure counter if not already defined
+                    # (will be reset on successful read)
                     ret, frame = cap.read()
                     if not ret:
-                        logger.debug("Failed to read frame from camera %s", cam_id)
+                        # Increment consecutive failure count
+                        if "read_fail_count" not in locals():
+                            read_fail_count = 0
+                        read_fail_count += 1
+                        logger.debug(
+                            "Failed to read frame from camera %s (consecutive failures: %d)",
+                            cam_id,
+                            read_fail_count,
+                        )
+                        # Sleep briefly to reduce CPU usage when frames are unavailable
+                        time.sleep(0.01)
+                        # If failures exceed threshold, attempt to reinitialize the camera
+                        if read_fail_count >= 30:
+                            logger.warning(
+                                "%d consecutive read failures – reinitializing camera %s",
+                                read_fail_count,
+                                cam_id,
+                            )
+                            cap.release()
+
+                            time.sleep(1.0)
+
+                            cap = cv2.VideoCapture(
+                                gstreamer_pipeline(cam_id), cv2.CAP_GSTREAMER
+                            )
+                            if not cap.isOpened():
+                                logger.error(
+                                    "Failed to re-open camera %s after repeated failures",
+                                    cam_id,
+                                )
+                            read_fail_count = 0
                         continue
+                    # Reset failure counter on successful read
+                    if "read_fail_count" in locals():
+                        read_fail_count = 0
 
                     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-                    ok, encimg = cv2.imencode('.jpg', frame, encode_param)
+                    ok, encimg = cv2.imencode(".jpg", frame, encode_param)
                     if not ok:
                         logger.debug("JPEG encoding failed for camera %s", cam_id)
                         continue
@@ -154,7 +223,7 @@ def camera_worker(cam_id: int, port: int, stop_event: threading.Event) -> None:
                         )
                         break
 
-                    length = struct.pack('>I', len(data))
+                    length = struct.pack(">I", len(data))
                     try:
                         conn.sendall(length + data)
                     except (socket.error, BrokenPipeError) as e:

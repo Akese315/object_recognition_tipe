@@ -32,7 +32,7 @@ import numpy as np
 HOST = "192.168.1.68"  # Server address – change as needed
 PORTS = (8000, 8001)  # Must match the server ports
 RECONNECT_DELAY = 2.0  # Seconds between reconnection attempts
-SOCKET_TIMEOUT = 5.0  # Seconds for socket operations
+SOCKET_TIMEOUT = 15.0  # Seconds for socket operations
 MAX_FRAME_SIZE = 2 * 1024 * 1024  # 2 MiB – sanity check on incoming frames
 
 # TLS configuration – enable when server uses TLS
