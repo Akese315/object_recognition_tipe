@@ -28,10 +28,10 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 # ---------------------------------------------------------------------------
 def gstreamer_pipeline(sensor_id: int) -> str:
     return (
-        f"nvarguscamerasrc sensor-id={sensor_id} sensor-mode=3 ! "  # mode 3 = 1280x720
-        f"video/x-raw(memory:NVMM), width=1280, height=720, framerate=60/1 ! "
+        f"nvarguscamerasrc sensor-id={sensor_id} sensor-mode=4 ! "
+        f"video/x-raw(memory:NVMM), width=1280, height=720, framerate=59/1 ! "
         f"nvvidconv ! "
-        f"video/x-raw(memory:NVMM), width=640, height=480 ! "  # scale explicite identique pour les 2
+        f"video/x-raw(memory:NVMM), width=640, height=480 ! "
         f"nvvidconv ! "
         f"video/x-raw, format=BGRx ! "
         f"videoconvert ! "
