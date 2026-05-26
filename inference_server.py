@@ -69,15 +69,11 @@ CFG = Config()
 
 def gstreamer_pipeline(sensor_id: int) -> str:
     return (
-        f"nvarguscamerasrc sensor-id={sensor_id} sensor-mode=4 ! "
-        f"video/x-raw(memory:NVMM), width=1280, height=720, framerate=59/1 ! "
-        f"nvvidconv ! "
-        f"video/x-raw(memory:NVMM), width=640, height=480 ! "
-        f"nvvidconv ! "
-        f"video/x-raw, format=BGRx ! "
-        f"videoconvert ! "
-        f"video/x-raw, format=BGR ! "
-        f"appsink drop=true max-buffers=1 sync=false"
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), width=3264, height=2464, framerate=30/1 ! "
+        f"nv3dcolorspace ! "
+        f"video/x-raw(memory:NVMM), format=Nv12 ! "
+        f"tee name=stream0 ! queue ! queue ! appsink max-buffers=1 name=sink0"
     )
 
 
