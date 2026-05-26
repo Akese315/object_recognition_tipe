@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-# server_inference.py — À lancer sur le Jetson Nano.
-#
-# Reprend exactement server.py qui fonctionnait, en ajoutant :
-#   - chargement du modèle YOLO
-#   - inférence sur chaque frame
-#   - envoi au client : [4B len_json][json][4B len_jpeg][jpeg]
+# inference_server.py — Jetson Nano, version optimisée
 
-# torch EN PREMIER pour éviter le conflit TLS avec GStreamer
 import json
 import logging
 import math
@@ -21,7 +15,6 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 import torch
-from PIL import Image
 from torchvision import transforms
 
 from model import LightweightYOLO
@@ -29,20 +22,18 @@ from utils import calculate_area
 from YOLO_loader import BoundingBox, CustomImage
 
 # ---------------------------------------------------------------------------
-# Configuration (identique à TIPE.py)
+# Configuration
 # ---------------------------------------------------------------------------
 
 MODEL_PATH = "face_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36/model.pth"
 
-CAMERA_IDS = (0, 1)
-PORT = 8000  # un seul port — on envoie json + jpeg ensemble
+PORT = 8000
 HOST = "0.0.0.0"
-
 MAX_FRAME_SIZE = 4 * 1024 * 1024
 JPEG_QUALITY = 70
 SOCKET_TIMEOUT = 5.0
 
-logger = logging.getLogger("server_inference")
+logger = logging.getLogger("inference_server")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
@@ -51,6 +42,9 @@ class Config:
     confidence_threshold: float = 0.3
     class_threshold: float = 0.9
     model_classes: List[str] = field(default_factory=lambda: ["face"])
+    # FIX 1 : même résolution que inference_app.py
+    capture_width: int = 640
+    capture_height: int = 480
     input_size: Tuple[int, int] = (640, 480)
 
     baseline: float = 0.060
@@ -63,53 +57,79 @@ CFG = Config()
 
 
 # ---------------------------------------------------------------------------
-# GStreamer pipeline — identique à server.py qui fonctionnait
+# FIX 2 : Pipeline GStreamer avec resize GPU intégré (nvvidconv)
+#          + framerate explicite + drop=true
 # ---------------------------------------------------------------------------
 
 
 def gstreamer_pipeline(sensor_id: int) -> str:
     return (
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
-        f"video/x-raw(memory:NVMM), width=1920, height=1080, framerate=30/1 ! "
+        # Capture en résolution native raisonnable (pas Full HD)
+        f"video/x-raw(memory:NVMM), width=1280, height=720, "
+        f"framerate=30/1, format=NV12 ! "
+        # Resize vers 640x480 sur le GPU Tegra (pas le CPU)
+        f"nvvidconv ! "
+        f"video/x-raw(memory:NVMM), width={CFG.capture_width}, height={CFG.capture_height} ! "
         f"nvvidconv ! "
         f"video/x-raw, format=BGRx ! "
         f"videoconvert ! "
         f"video/x-raw, format=BGR ! "
-        f"appsink max-buffers=1 drop=1"
+        # max-buffers=1 drop=true : on ne garde que la frame la plus récente
+        f"appsink max-buffers=1 drop=true sync=false"
     )
 
 
 # ---------------------------------------------------------------------------
-# Camera — identique à server.py
+# Camera avec thread dédié pour ne jamais bloquer la boucle d'inférence
 # ---------------------------------------------------------------------------
 
 
 class Camera:
-    def __init__(self, sensor_id):
+    """
+    Thread de capture dédié : la dernière frame est toujours disponible
+    immédiatement, sans attendre le prochain cap.read() qui peut bloquer.
+    """
+
+    def __init__(self, sensor_id: int):
         self.sensor_id = sensor_id
-        self.cap = None
-        self.open()
+        self._lock = threading.Lock()
+        self._frame: Optional[np.ndarray] = None
+        self._ok = False
+        self._stop = threading.Event()
+        self.cap = self._open()
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
 
-    def open(self):
+    def _open(self):
         pipeline = gstreamer_pipeline(self.sensor_id)
-        self.cap = cv2.VideoCapture(pipeline)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
             logger.error("Camera %s open failed", self.sensor_id)
+        return cap
 
-    def read(self):
-        if self.cap is None or not self.cap.isOpened():
-            self.open()
-            return False, None
-        return self.cap.read()
+    def _capture_loop(self):
+        while not self._stop.is_set():
+            ret, frame = self.cap.read()
+            with self._lock:
+                self._ok = ret
+                if ret:
+                    self._frame = frame
+        self.cap.release()
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray]]:
+        with self._lock:
+            if self._frame is None:
+                return False, None
+            return self._ok, self._frame.copy()
 
     def release(self):
-        if self.cap:
-            self.cap.release()
+        self._stop.set()
+        self._thread.join(timeout=2.0)
 
 
 # ---------------------------------------------------------------------------
-# Modèle — identique à TIPE.py
+# Modèle
 # ---------------------------------------------------------------------------
 
 
@@ -117,9 +137,7 @@ def init_ai_model() -> Tuple[LightweightYOLO, torch.device]:
     if not os.path.isfile(MODEL_PATH):
         raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
 
-    print(f"{MODEL_PATH}")
-
-    print("Chargement du modèle...")
+    logger.info("Chargement du modèle : %s", MODEL_PATH)
     state_dict = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
     anchors = state_dict["anchors"]
 
@@ -135,11 +153,34 @@ def init_ai_model() -> Tuple[LightweightYOLO, torch.device]:
     )
     model.load_state_dict(state_dict)
     model.to(device).eval()
+
+    # FIX 3 : pré-chauffer le modèle pour éviter la latence au 1er appel
+    logger.info("Préchauffage du modèle...")
+    dummy = torch.zeros(1, 3, CFG.capture_height, CFG.capture_width).to(device)
+    with torch.no_grad():
+        _ = model(dummy)
+    logger.info("Modèle prêt.")
+
     return model, device
 
 
 # ---------------------------------------------------------------------------
-# Inférence — identique à TIPE.py
+# FIX 4 : Conversion frame→tensor sans passer par PIL
+# ---------------------------------------------------------------------------
+
+_to_tensor = transforms.ToTensor()
+
+
+def frame_to_tensor(frame_bgr: np.ndarray) -> torch.Tensor:
+    """BGR numpy → RGB float32 tensor [3, H, W], range [0,1], sans PIL."""
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    # np → tensor directement, pas de détour par PIL.Image
+    tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().div(255.0)
+    return tensor
+
+
+# ---------------------------------------------------------------------------
+# Inférence
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +219,7 @@ def _prepare_input(image_tensor: torch.Tensor, reduction: int) -> CustomImage:
 
 
 # ---------------------------------------------------------------------------
-# Profondeur stéréo — identique à TIPE.py
+# Profondeur stéréo
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +247,7 @@ def compute_stereo_depth(
 
 
 # ---------------------------------------------------------------------------
-# Sérialisation des boxes
+# Sérialisation
 # ---------------------------------------------------------------------------
 
 
@@ -222,21 +263,19 @@ def boxes_to_json(boxes1: List[BoundingBox], boxes2: List[BoundingBox]) -> bytes
         }
 
     return json.dumps(
-        {
-            "cam1": [box_dict(b) for b in boxes1],
-            "cam2": [box_dict(b) for b in boxes2],
-        }
+        {"cam1": [box_dict(b) for b in boxes1], "cam2": [box_dict(b) for b in boxes2]}
     ).encode("utf-8")
 
 
 # ---------------------------------------------------------------------------
-# Worker — reprend la structure exacte de camera_worker dans server.py
+# Worker principal
 # ---------------------------------------------------------------------------
 
 
 def camera_worker(
     model: LightweightYOLO, device: torch.device, stop_event: threading.Event
 ):
+    # FIX 5 : les cameras tournent dans leurs propres threads de capture
     cam0 = Camera(0)
     cam1 = Camera(1)
     reduction = model.get_reduction_factor()
@@ -248,12 +287,10 @@ def camera_worker(
     server_sock.settimeout(1.0)
 
     logger.info("En attente d'un client sur le port %s...", PORT)
-
     conn = None
 
     try:
         while not stop_event.is_set():
-            # Attente connexion client
             try:
                 conn, addr = server_sock.accept()
                 logger.info("Client %s connecté", addr)
@@ -261,21 +298,23 @@ def camera_worker(
             except socket.timeout:
                 continue
 
+            fps_counter = 0
+            fps_start = time.time()
+
             try:
                 while not stop_event.is_set():
+                    t0 = time.time()
+
                     ret0, frame0 = cam0.read()
                     ret1, frame1 = cam1.read()
 
                     if not ret0 or not ret1:
-                        time.sleep(0.01)
+                        time.sleep(0.005)
                         continue
 
-                    # ── Préparation tenseurs (comme TIPE.py) ──────────
-                    frame0_rgb = cv2.cvtColor(frame0, cv2.COLOR_BGR2RGB)
-                    frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
-
-                    raw_tensor0 = transforms.ToTensor()(Image.fromarray(frame0_rgb))
-                    raw_tensor1 = transforms.ToTensor()(Image.fromarray(frame1_rgb))
+                    # FIX 4 : conversion rapide sans PIL
+                    raw_tensor0 = frame_to_tensor(frame0)
+                    raw_tensor1 = frame_to_tensor(frame1)
 
                     inference0 = _prepare_input(raw_tensor0, reduction)
                     inference1 = _prepare_input(raw_tensor1, reduction)
@@ -283,11 +322,35 @@ def camera_worker(
                     input0 = inference0.get_raw_tensor().unsqueeze(0).to(device)
                     input1 = inference1.get_raw_tensor().unsqueeze(0).to(device)
 
-                    # ── Inférence ─────────────────────────────────────
-                    boxes0 = detect_boxes(input0, model)
-                    boxes1 = detect_boxes(input1, model)
+                    # FIX 6 : les deux inférences dans le même bloc no_grad
+                    # pour minimiser les synchronisations CUDA
+                    with torch.no_grad():
+                        out0 = model(input0)
+                        out1 = model(input1)
+                        out0 = model.predict(out0)
+                        out1 = model.predict(out1)
 
-                    # ── Profondeur stéréo ─────────────────────────────
+                    def _extract(out):
+                        B, H, W, A, S = out.shape
+                        mask = out[0, ..., 0] > CFG.confidence_threshold
+                        vp = out[0][mask]
+                        if vp.numel() == 0:
+                            return []
+                        ms, _ = torch.max(vp[:, 5:], dim=1)
+                        vp = vp[ms > CFG.class_threshold]
+                        boxes = [
+                            BoundingBox.from_tensor(
+                                p.cpu(), len(CFG.model_classes), W, H
+                            )
+                            for p in vp
+                        ]
+                        boxes.sort(key=calculate_area, reverse=True)
+                        return boxes
+
+                    boxes0 = _extract(out0)
+                    boxes1 = _extract(out1)
+
+                    # Profondeur stéréo
                     if boxes0 and boxes1:
                         p = compute_stereo_depth(
                             boxes0[0].x_center,
@@ -298,9 +361,9 @@ def camera_worker(
                         if p is not None:
                             logger.info("Profondeur: %.1f cm", p[2] * 100)
 
-                    # ── Image annotée (comme TIPE.py) ─────────────────
-                    if boxes0:
-                        res0 = cv2.cvtColor(
+                    # Image annotée
+                    res0 = (
+                        cv2.cvtColor(
                             np.array(
                                 inference0.get_image(
                                     [boxes0[0]], objectness_strict=False
@@ -308,11 +371,12 @@ def camera_worker(
                             ),
                             cv2.COLOR_RGB2BGR,
                         )
-                    else:
-                        res0 = frame0
+                        if boxes0
+                        else frame0
+                    )
 
-                    if boxes1:
-                        res1 = cv2.cvtColor(
+                    res1 = (
+                        cv2.cvtColor(
                             np.array(
                                 inference1.get_image(
                                     [boxes1[0]], objectness_strict=False
@@ -320,23 +384,24 @@ def camera_worker(
                             ),
                             cv2.COLOR_RGB2BGR,
                         )
-                    else:
-                        res1 = frame1
-
-                    # ── Combinaison côte à côte ───────────────────────
-                    h = min(res0.shape[0], res1.shape[0])
-                    combined = np.hstack(
-                        [
-                            cv2.resize(
-                                res0, (int(res0.shape[1] * h / res0.shape[0]), h)
-                            ),
-                            cv2.resize(
-                                res1, (int(res1.shape[1] * h / res1.shape[0]), h)
-                            ),
-                        ]
+                        if boxes1
+                        else frame1
                     )
 
-                    # ── Encodage JPEG ─────────────────────────────────
+                    # Combinaison côte à côte
+                    # FIX 7 : les deux frames ont déjà la même taille (640x480)
+                    # donc pas besoin de resize dynamique
+                    combined = np.hstack([res0, res1])
+
+                    # FPS overlay
+                    fps_counter += 1
+                    if time.time() - fps_start >= 2.0:
+                        fps = fps_counter / (time.time() - fps_start)
+                        logger.info("FPS serveur : %.1f", fps)
+                        fps_counter = 0
+                        fps_start = time.time()
+
+                    # Encodage JPEG
                     ok, enc = cv2.imencode(
                         ".jpg",
                         combined,
@@ -351,7 +416,6 @@ def camera_worker(
                     if len(jpeg_bytes) > MAX_FRAME_SIZE:
                         continue
 
-                    # ── Envoi : [4B len_json][json][4B len_jpeg][jpeg] ─
                     packet = (
                         struct.pack(">I", len(json_bytes))
                         + json_bytes
@@ -361,8 +425,7 @@ def camera_worker(
                     conn.sendall(packet)
 
             except (socket.error, BrokenPipeError):
-                pass
-
+                logger.info("Client déconnecté")
             finally:
                 if conn:
                     conn.close()
@@ -376,7 +439,7 @@ def camera_worker(
 
 
 # ---------------------------------------------------------------------------
-# Main — identique à server.py
+# Main
 # ---------------------------------------------------------------------------
 
 
