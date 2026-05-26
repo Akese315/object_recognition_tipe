@@ -119,6 +119,8 @@ def init_ai_model() -> Tuple[LightweightYOLO, torch.device]:
     if not os.path.isfile(MODEL_PATH):
         raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
 
+    print(f"{MODEL_PATH}")
+
     print("Chargement du modèle...")
     state_dict = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
     anchors = state_dict["anchors"]
