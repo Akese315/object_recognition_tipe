@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
+from torchvision import transforms
 
 from model import LightweightYOLO
 from utils import calculate_area
@@ -273,14 +274,8 @@ def camera_worker(
                     frame0_rgb = cv2.cvtColor(frame0, cv2.COLOR_BGR2RGB)
                     frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
 
-                    raw_tensor0 = (
-                        torch.tensor(frame0_rgb, dtype=torch.float32).permute(2, 0, 1)
-                        / 255.0
-                    )
-                    raw_tensor1 = (
-                        torch.tensor(frame1_rgb, dtype=torch.float32).permute(2, 0, 1)
-                        / 255.0
-                    )
+                    raw_tensor0 = transforms.ToTensor()(Image.fromarray(frame0_rgb))
+                    raw_tensor1 = transforms.ToTensor()(Image.fromarray(frame1_rgb))
 
                     inference0 = _prepare_input(raw_tensor0, reduction)
                     inference1 = _prepare_input(raw_tensor1, reduction)
