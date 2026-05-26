@@ -32,7 +32,7 @@ from YOLO_loader import BoundingBox, CustomImage
 # Configuration (identique à TIPE.py)
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = "ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth"
+MODEL_PATH = "face_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36/model.pth"
 
 CAMERA_IDS = (0, 1)
 PORT = 8000  # un seul port — on envoie json + jpeg ensemble
