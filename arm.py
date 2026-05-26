@@ -16,6 +16,10 @@ EPSILON = 1e-7  # Tolerance for zero-length vectors
 DEG_PER_RPM = 0.732  # Conversion factor from RPM to internal units
 ACCEL_FACTOR = 8.7  # Conversion factor for acceleration
 
+P_adress = 0x15
+D_adress = 0x16
+I_adress = 0x17
+
 
 class Arm:
     def __init__(
@@ -94,7 +98,7 @@ class Arm:
         self.running = False
 
     def clamp_angle(self, angle):
-        physical_angle = self.sens_rotation * angle + self.origin
+        physical_angle = angle + self.origin
         physical_angle = clamp(
             physical_angle, self.min_angle_limit, self.max_angle_limit
         )
@@ -172,3 +176,27 @@ class Arm:
         if arm_len_vector is None:
             arm_len_vector = np.array([0, 0, 0])
         self.arm_len_vector = arm_len_vector
+
+    def set_pid(self, p, i, d):
+        try:
+            self.packetHandler.write1ByteTxRx(self.servo_moteur_id, P_adress, p)
+            self.packetHandler.write1ByteTxRx(self.servo_moteur_id, I_adress, i)
+            self.packetHandler.write1ByteTxRx(self.servo_moteur_id, D_adress, d)
+        except Exception as e:
+            print(f"Error pid: {e}")
+
+    def read_pid(self):
+        try:
+            p, scs_comm_result, scs_error = self.packetHandler.read1ByteTxRx(
+                self.servo_moteur_id, P_adress
+            )
+            i, scs_comm_result, scs_error = self.packetHandler.read1ByteTxRx(
+                self.servo_moteur_id, I_adress
+            )
+            d, scs_comm_result, scs_error = self.packetHandler.read1ByteTxRx(
+                self.servo_moteur_id, D_adress
+            )
+            return p, i, d
+        except Exception as e:
+            print(f"Error pid: {e}")
+            return None, None, None

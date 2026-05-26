@@ -1,25 +1,9 @@
-#!/usr/bin/env python3
-"""
-client.py
-----------
-
-Connect to the video streams served by ``server.py`` on ports 8000 and 8001,
-receive JPEG frames, decode them with OpenCV and display the two streams
-side‑by‑side in a single window.
-
-The client automatically retries connections if the server is not yet ready.
-Press **q** (while the OpenCV window has focus) or **Ctrl‑C** to quit.
-
-Usage
------
-    $ python client.py   # defaults to localhost, ports 8000/8001
-"""
-
 import logging
 import socket
 import ssl
 import struct
 import sys
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -39,9 +23,6 @@ MAX_FRAME_SIZE = 2 * 1024 * 1024  # 2 MiB – sanity check on incoming frames
 TLS_ENABLED = False  # Set to True to use TLS
 TLS_CERT: Optional[str] = None  # Path to CA bundle or server cert for verification
 
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
 logger = logging.getLogger("client")
 logging.basicConfig(
     level=logging.INFO,
@@ -50,9 +31,30 @@ logging.basicConfig(
 )
 
 
-# ---------------------------------------------------------------------------
-# Helper: receive exactly *n* bytes from a socket
-# ---------------------------------------------------------------------------
+class FrameBuffer:
+    """Conserve uniquement la frame la plus récente."""
+
+    def __init__(self):
+        self._frame = None
+        self._lock = threading.Lock()
+
+    def put(self, frame: np.ndarray):
+        with self._lock:
+            self._frame = frame
+
+    def get(self) -> np.ndarray | None:
+        with self._lock:
+            return self._frame
+
+
+class FrameBufferPair:
+    """Two FrameBuffers for stereo / dual-camera setups."""
+
+    def __init__(self):
+        self.frame1 = FrameBuffer()
+        self.frame2 = FrameBuffer()
+
+
 def recvall(sock: socket.socket, n: int) -> bytes:
     """Read *n* bytes from *sock*, handling short reads.
 
@@ -123,78 +125,61 @@ def connect_with_retry(port: int) -> socket.socket:
             time.sleep(RECONNECT_DELAY)
 
 
-# ---------------------------------------------------------------------------
-# Main loop – receive, decode, and display frames
-# ---------------------------------------------------------------------------
-def main() -> None:
-    # Establish initial connections for both streams
-    sockets: list[Optional[socket.socket]] = [connect_with_retry(p) for p in PORTS]
+def stream_reader(port, buffer: FrameBuffer, stop_event: threading.Event):
+    """Thread dédié à la lecture d'un stream."""
+    while not stop_event.is_set():
+        sock = connect_with_retry(port)
+        try:
+            while not stop_event.is_set():
+                raw_len = recvall(sock, 4)
+                (msg_len,) = struct.unpack(">I", raw_len)
+                if msg_len > MAX_FRAME_SIZE:
+                    raise ValueError("Frame trop grande")
+                jpeg_data = recvall(sock, msg_len)
+                np_arr = np.frombuffer(jpeg_data, dtype=np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    buffer.put(img)  # toujours la plus récente
+        except Exception as e:
+            logger.error("Stream %s perdu: %s", port, e)
+            sock.close()
+
+
+def main():
+    stop_event = threading.Event()
+    buffers = [FrameBuffer() for _ in PORTS]
+
+    # Un thread de lecture par caméra
+    for port, buf in zip(PORTS, buffers):
+        t = threading.Thread(
+            target=stream_reader, args=(port, buf, stop_event), daemon=True
+        )
+        t.start()
 
     try:
         while True:
-            frames = []
-            for idx, sock in enumerate(sockets):
-                if sock is None:
-                    # Socket was lost previously – try to reconnect now
-                    sockets[idx] = connect_with_retry(PORTS[idx])
-                    sock = sockets[idx]
-                try:
-                    # 1️⃣ read 4‑byte length
-                    raw_len = recvall(sock, 4)
-                    (msg_len,) = struct.unpack(">I", raw_len)
-                    if msg_len > MAX_FRAME_SIZE:
-                        raise ValueError(
-                            f"Frame size {msg_len} exceeds limit of {MAX_FRAME_SIZE} bytes"
-                        )
+            frames = [buf.get() for buf in buffers]
 
-                    # 2️⃣ read the JPEG payload
-                    jpeg_data = recvall(sock, msg_len)
-
-                    # Decode JPEG to BGR image
-                    np_arr = np.frombuffer(jpeg_data, dtype=np.uint8)
-                    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                    if img is None:
-                        raise ValueError("Failed to decode JPEG frame")
-                    frames.append(img)
-                except (ConnectionError, socket.timeout, OSError, ValueError) as e:
-                    logger.error("Stream %s lost: %s", idx, e)
-                    # Cleanly close the broken socket before reconnecting
-                    if sock:
-                        try:
-                            sock.shutdown(socket.SHUT_RDWR)
-                        except OSError:
-                            pass
-                        sock.close()
-                    sockets[idx] = None  # Mark for reconnection on next loop iteration
-                    break  # abort current display iteration; will retry next loop
-
-            if len(frames) != 2:
-                # Not enough frames to display – skip this iteration
+            if any(f is None for f in frames):
+                time.sleep(0.01)
                 continue
 
-            # Resize to same height if needed (optional)
             h_min = min(f.shape[0] for f in frames)
             resized = [
                 cv2.resize(f, (int(f.shape[1] * h_min / f.shape[0]), h_min))
                 for f in frames
             ]
-
             combined = np.hstack(resized)
-            cv2.imshow("Jetson Streams (press 'q' to quit)", combined)
-
+            TARGET_W = 1440
+            TARGET_H = int(combined.shape[0] * TARGET_W / combined.shape[1])
+            combined = cv2.resize(combined, (TARGET_W, TARGET_H))
+            cv2.imshow("Streams", combined)
             if cv2.waitKey(1) & 0xFF == ord("q"):
-                logger.info("'q' pressed – exiting.")
                 break
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt – exiting.")
+        pass
     finally:
-        for s in sockets:
-            if s:
-                try:
-                    s.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                s.close()
+        stop_event.set()
         cv2.destroyAllWindows()
 
 

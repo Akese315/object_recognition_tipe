@@ -1,7 +1,11 @@
 import asyncio
+import logging
 import math
 import os
+import threading
 import time
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -9,251 +13,320 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-import robot
+import client as client_mod
 from model import LightweightYOLO
-
-# Camera calibration constants (adjust as needed)
-CAMERA_ANGLE = math.radians(30)  # example angle
-CAMERA_HEIGHT = 0.5  # meters
-from utils import calculate_area, get_x_reel, get_y_reel, get_z_reel
+from utils import calculate_area
 from YOLO_loader import BoundingBox, CustomImage
 
+# ---------------------------------------------------------------------------
+# Configuration -------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
 MODEL_PATH = os.path.join(
-    "face_models",
-    "cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36",
-    "model.pth",
+    "face_models", "cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36", "model.pth"
 )
-# Verify model path exists
-if not os.path.isfile(MODEL_PATH):
-    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
-# MODEL_PATH = "ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth"
-CONF_THRESHOLD = 0.3
-CLASS_THRESHOLD = 0.9
-
-CLASSES = ["face"]
-
-N_CLASS = len(CLASSES)
-COLORS = [(0, 255, 0), (255, 0, 0)]  # Vert pour card, bleu pour screen
 
 
-"""async def init_robot(rbt: robot.Robot) -> None:
-    await rbt.add_arm(
-        servo_moteur_id=1,
-        origin=180,
-        axis="y",
-        min_angle_limit=90,
-        max_angle_limit=270,
-        sens_rotation=-1.0,
-        arm_len=np.array([0.035, 0.115, 0]),
+@dataclass(frozen=True)
+class Config:
+    """All immutable configuration for the inference pipeline."""
+
+    # Model
+    confidence_threshold: float = 0.3
+    class_threshold: float = 0.9
+    model_classes: List[str] = field(default_factory=lambda: ["face"])
+    input_size: Tuple[int, int] = (640, 480)
+    camera_angle_deg: float = 30.0
+
+    # Camera (stereo / depth)
+    baseline: float = 0.060  # baseline en mètre
+    camera_height: float = 0.5  # hauteur de la caméra (m)
+    H_POV_deg: float = 73.0  # champ horizontal vue
+    V_POV_deg: float = 50.0  # champ vertical vue
+
+    # Network
+    ports: Tuple[int, int] = (8000, 8001)
+
+
+CFG = Config()
+
+# ---------------------------------------------------------------------------
+# Helpers --------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def _init_logging() -> None:
+    """Initialise le logging basique pour le script."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(levelname)s] %(message)s",
     )
-    await rbt.add_arm(
-        servo_moteur_id=2,
-        origin=180,
-        axis="z",
-        min_angle_limit=90,
-        max_angle_limit=270,
-        sens_rotation=-1.0,
-        arm_len=np.array([0.03, 0.115, 0]),
-    )
-    await rbt.add_arm(
-        servo_moteur_id=3,
-        origin=90,
-        axis="z",
-        min_angle_limit=90,
-        max_angle_limit=270,
-        sens_rotation=-1.0,
-        arm_len=np.array([0, 0.135, 0]),
-    )
-    await rbt.add_arm(
-        servo_moteur_id=4,
-        origin=180,
-        axis="z",
-        min_angle_limit=90,
-        max_angle_limit=270,
-        sens_rotation=-1.0,
-        arm_len=np.array([0, 0.06, 0]),
-    )
-    await rbt.add_arm(
-        servo_moteur_id=5,
-        origin=0,
-        axis="y",
-        min_angle_limit=0,
-        max_angle_limit=180,
-        sens_rotation=-1.0,
-        arm_len=np.array([0, 0.1, 0]),
-    )
-"""
 
 
-async def main() -> None:
-    """Initialize robot, model, and start inference loop.
-
-    The robot is instantiated locally and passed to the helper
-    functions that require it.
-    """
-    # Create robot instance and configure arms
-    # rbt = robot.Robot("COM3")
-    # await init_robot(rbt)
-
-    # Compute initial joint angles
-    # angles, _ = rbt.IK.run_ccd(0.2, 0.0, 0.0)
-    # angles *= 180 / np.pi  # Convert radians to degrees
-    # await rbt._rotate_arms_async(angles, 1000, 128)
-
-    # Load AI model
-    model, device = init_ai_model()
-    await run_loop(model, device)
+# ---------------------------------------------------------------------------
+# Model loading -------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
-def init_ai_model():
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    anchors = state_dict["anchors"]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def init_ai_model() -> tuple[LightweightYOLO, torch.device]:
+    if not os.path.isfile(MODEL_PATH):
+        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+
     print("Configuration terminée. Chargement du modèle...")
+    state_dict = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
+    anchors = state_dict["anchors"]
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = LightweightYOLO(
-        num_classes=N_CLASS,
+        num_classes=len(CFG.model_classes),
         base_kernel_num=32,
         conv_layer=5,
         divider=1,
         anchors=anchors,
     )
     model.load_state_dict(state_dict)
-    model.to(device)
+    model.to(device).eval()
 
     return model, device
 
 
-async def moving_arm_async(rbt: robot.Robot, x: float, y: float, z: float) -> None:
-    """Run ``moving_arm`` in a background thread.
+# ---------------------------------------------------------------------------
+# Inference ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-    Parameters
-    ----------
-    rbt:
-        Instance of :class:`robot.Robot` controlling the arm.
-    x, y, z:
-        Target coordinates in real‑world space.
+
+def detect_boxes(
+    input_tensor: torch.Tensor,
+    model: LightweightYOLO,
+) -> List[BoundingBox]:
+    return []
+    with torch.no_grad():
+        output = model(input_tensor)  # ← ligne manquante
+        B, C, H, W = input_tensor.shape
+        mask = output[0, ..., 0] > CFG.confidence_threshold
+
+        valid_preds = output[0][mask]
+        if valid_preds.numel() == 0:
+            return []
+
+        class_scores = valid_preds[:, 5:]
+        max_scores, _ = torch.max(class_scores, dim=1)
+        valid_preds = valid_preds[max_scores > CFG.class_threshold]
+
+        boxes: List[BoundingBox] = [
+            BoundingBox.from_tensor(pred.cpu(), len(CFG.model_classes), W, H)
+            for pred in valid_preds
+        ]
+        boxes.sort(key=calculate_area, reverse=True)
+        return boxes
+
+
+# ---------------------------------------------------------------------------
+# Stereo depth ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def compute_stereo_depth(
+    x1: float, x2: float, y1: float, y2: float
+) -> Optional[np.ndarray]:
+    """Intersect two rays to recover the 3-D point (stereo vision).
+
+    Returns ``None`` when the rays do not produce a valid intersection.
     """
-    await asyncio.to_thread(moving_arm, rbt, x, y, z)
+    HPOV = math.radians(CFG.H_POV_deg)
+    VPOV = math.radians(CFG.V_POV_deg)
+
+    m = 2.0 * math.tan(HPOV / 2)
+    k = 2.0 * math.tan(VPOV / 2)
+
+    v1 = np.array([x1 * m, k * y1, 1.0])
+    v2 = np.array([x2 * m, k * y2, 1.0])
+
+    A = np.array([-CFG.baseline / 2, CFG.camera_height, 1.0])
+    B = np.array([CFG.baseline / 2, CFG.camera_height, 1.0])
+
+    d = A - B
+
+    denom = np.dot(v1, v2) ** 2 - np.dot(v1, v1) * np.dot(v2, v2)
+    if abs(denom) < 1e-12:
+        return None
+
+    t_prime = (np.dot(d, v2) * np.dot(v1, v1) - np.dot(d, v1) * np.dot(v1, v2)) / denom
+    t = (np.dot(d, v2) * np.dot(v1, v2) - np.dot(d, v1) * np.dot(v2, v2)) / denom
+
+    p = (A + B + v1 * t + v2 * t_prime) / 2.0
+    return p
 
 
-def moving_arm(rbt: robot.Robot, x: float, y: float, z: float) -> None:
-    angles, calculated_position = rbt.IK.run_ccd(0.05, y / 10, x / 10)
-    if np.array_equal(angles, np.zeros(5)):
-        print(
-            f"x:{x}, y:{y}\n Position pas atteignable ",
-            end="\r",
-            flush=True,
-        )
-    else:
-        print(
-            f"x:{x}, y:{y}\n",
-            end="\r",
-            flush=True,
-        )
-    rbt.rotate(angles, 1000, 128)
+# ---------------------------------------------------------------------------
+# Display --------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def _prepare_input(image_tensor: torch.Tensor, reduction: int):
+    """Wrap a tensor in a ``CustomImage`` with letter-boxing."""
+    return CustomImage.from_tensor(
+        image_tensor=image_tensor,
+        target_size=CFG.input_size,
+        reduction_factor=reduction,
+        bounding_boxes=[],
+    )
+
+
+def _draw_fps_overlay(frame: np.ndarray, fps: float) -> None:
+    cv2.putText(
+        img=frame,
+        text=f"FPS: {fps:.2f}",
+        org=(10, 50),
+        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+        fontScale=1,
+        color=(0, 255, 0),
+        thickness=2,
+        lineType=cv2.LINE_AA,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main loop ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 async def run_loop(model: LightweightYOLO, device: torch.device) -> None:
     model.eval()
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    if not cap.isOpened():
-        raise RuntimeError("Erreur : Impossible d'ouvrir la caméra.")
+    stop_event = threading.Event()
+    buffers = client_mod.FrameBufferPair()
+
+    # Thread de lecture par caméra
+    for port, buf in zip(CFG.ports, (buffers.frame1, buffers.frame2)):
+        t = threading.Thread(
+            target=client_mod.stream_reader, args=(port, buf, stop_event), daemon=True
+        )
+        t.start()
+
+    # Laisser le temps aux threads de recevoir les premières frames
+    await asyncio.sleep(2.0)  # ← ajouter ceci
+
+    reduction = model.get_reduction_factor()
+    consecutive_missing = 0
+    max_consecutive_missing = 30  # ~30s si 1 fps
 
     print("Inférence en temps réel démarrée. Appuie sur 'q' pour quitter.")
-    reduction = model.get_reduction_factor()
-    transform = transforms.Compose([transforms.ToTensor()])
+
     while True:
-        ret, frame = cap.read()
-        process_time_start = time.time()
+        t_start = time.time()
 
-        if not ret:
-            break
+        frame1 = buffers.frame1.get()
+        frame2 = buffers.frame2.get()
 
-        display_frame = frame.copy()
-        orig_h, orig_w = frame.shape[:2]
+        if frame1 is None or frame2 is None:
+            consecutive_missing += 1
+            gray = np.zeros((480, 1280, 3), dtype=np.uint8)
+            _draw_fps_overlay(gray, 0.0)
+            cv2.imshow("YOLO Real-time Detection", gray)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+            if consecutive_missing >= max_consecutive_missing:
+                logging.info("No frames received for too long. Quitting.")
+                break  # ← manquait
+            continue
 
-        # Préparation
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        raw_tensor = transforms.ToTensor()(Image.fromarray(frame_rgb))
+        consecutive_missing = 0
 
-        inference_image = CustomImage.from_tensor(
-            image_tensor=raw_tensor,
-            target_size=(640, 480),
-            reduction_factor=reduction,
-            bounding_boxes=[],
+        frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
+        frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+
+        raw_tensor1 = transforms.ToTensor()(Image.fromarray(frame1_rgb))
+        raw_tensor2 = transforms.ToTensor()(Image.fromarray(frame2_rgb))
+
+        inference1 = _prepare_input(raw_tensor1, reduction)
+        inference2 = _prepare_input(raw_tensor2, reduction)
+
+        input1 = inference1.get_raw_tensor().unsqueeze(0).to(device)
+        input2 = inference2.get_raw_tensor().unsqueeze(0).to(device)
+
+        # Inférence en parallèle (les deux threads tournent vraiment en même temps)
+        #
+
+        boxes1, boxes2 = await asyncio.gather(
+            asyncio.to_thread(detect_boxes, input1, model),
+            asyncio.to_thread(detect_boxes, input2, model),
         )
-        input_tensor = inference_image.get_raw_tensor().unsqueeze(0).to(device)
-        with torch.no_grad():
-            output = model(input_tensor)
-            output = model.predict(output)
-            # print(f"Output stats: min={output.min().item():.4f}, max={output.max().item():.4f}, mean={output.mean().item():.4f}")
 
-            B, H, W, A, S = output.shape
-            pred_boxes = []
+        # ── Caméra 1 ──────────────────────────────────────────────
+        if boxes1:
+            image_pil1 = inference1.get_image(
+                predicted_bb_boxes=[boxes1[0]],
+                objectness_strict=False,
+            )
+            res_bgr1 = cv2.cvtColor(np.array(image_pil1), cv2.COLOR_RGB2BGR)
+        else:
+            res_bgr1 = frame1.copy()
 
-            mask = output[0, ..., 0] > CONF_THRESHOLD
+        # ── Caméra 2 ──────────────────────────────────────────────
+        if boxes2:
+            image_pil2 = inference2.get_image(
+                predicted_bb_boxes=[boxes2[0]],
+                objectness_strict=False,
+            )
+            res_bgr2 = cv2.cvtColor(np.array(image_pil2), cv2.COLOR_RGB2BGR)
+        else:
+            res_bgr2 = frame2.copy()
 
-            valid_preds = output[0][mask]
-            class_scores = valid_preds[:, 5:]
-            max_class_scores, _ = torch.max(class_scores, dim=1)
-            valid_preds = valid_preds[max_class_scores > CLASS_THRESHOLD]
-
-            pred_boxes = [
-                BoundingBox.from_tensor(pred.cpu(), N_CLASS, W, H)
-                for pred in valid_preds
-            ]
-            pred_boxes.sort(key=lambda box: calculate_area(box), reverse=True)
-
-            res_rgb = frame_rgb
-            if len(pred_boxes) != 0:
-                HPOV = math.radians(47.1)
-                VPOV = math.radians(36.2)
-                main_box = pred_boxes[0]
-                res_pil = inference_image.get_image(
-                    predicted_bb_boxes=[main_box], objectness_strict=False
+        # ── Profondeur stéréo ──────────────────────────────────────
+        if boxes1 and boxes2:
+            point_reel = compute_stereo_depth(
+                boxes1[0].x_center,
+                boxes2[0].x_center,
+                boxes1[0].y_center,
+                boxes2[0].y_center,
+            )
+            if point_reel is not None:
+                print(
+                    f"Point réel: {point_reel}, profondeur: {point_reel[2] * 100:.1f} cm"
                 )
-                x = main_box.x_center
-                y = main_box.y_center
 
-                # Compute real-world coordinates (angle and height should be calibrated)
-                z = get_z_reel(y, CAMERA_ANGLE, HPOV, VPOV, CAMERA_HEIGHT)
-                x_reel = get_x_reel(x, z, HPOV)
-                y_reel = get_y_reel(y, z, VPOV)
-                width = main_box.width
-                height = main_box.height
-
-                # asyncio.create_task(moving_arm_async(rbt, x_reel, y_reel, z))
-
-            # Convertir en format OpenCV pour l'afficher (RGB -> BGR)
-            res_np = np.array(res_pil)
-            res_bgr = cv2.cvtColor(res_np, cv2.COLOR_RGB2BGR)
-            process_time_end = time.time()
-            process_time_interval = process_time_end - process_time_start
-            fps_text = f"FPS: {1.0 / process_time_interval:.2f}"
-
-            cv2.putText(
-                img=res_bgr,
-                text=fps_text,
-                org=(10, 50),  # Position (x, y) en pixels (coin haut gauche)
-                fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                fontScale=1,  # Taille de la police
-                color=(0, 255, 0),  # Couleur (B, G, R) -> Ici Vert
-                thickness=2,  # Épaisseur du trait
-                lineType=cv2.LINE_AA,  # Anti-aliasing pour un texte plus net
+        # ── Affichage côte à côte (comme client.py) ───────────────
+        h = min(res_bgr1.shape[0], res_bgr2.shape[0])
+        if res_bgr1.shape[0] != h:
+            res_bgr1 = cv2.resize(
+                res_bgr1, (int(res_bgr1.shape[1] * h / res_bgr1.shape[0]), h)
+            )
+        if res_bgr2.shape[0] != h:
+            res_bgr2 = cv2.resize(
+                res_bgr2, (int(res_bgr2.shape[1] * h / res_bgr2.shape[0]), h)
             )
 
-            cv2.imshow("YOLO Real-time Detection", res_bgr)
+        combined = np.hstack([res_bgr1, res_bgr2])
 
+        fps = 1.0 / max(time.time() - t_start, 1e-6)
+        _draw_fps_overlay(combined, fps)
+
+        cv2.imshow("YOLO Real-time Detection", combined)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    # Release resources after loop ends
-    cap.release()
+    stop_event.set()
+
+
+def cleanup() -> None:
+    """Fermer proprement les fenêtres OpenCV."""
     cv2.destroyAllWindows()
 
 
-# Entry point
+# ---------------------------------------------------------------------------
+# Entry point ----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+async def _run() -> None:
+    _init_logging()
+    model, device = init_ai_model()
+
+    try:
+        await run_loop(model, device)
+    finally:
+        cleanup()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_run())

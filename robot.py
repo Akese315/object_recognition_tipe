@@ -144,6 +144,7 @@ class Robot:
         acceleration_speed: float,
     ):
         tasks = []
+        print("rotate")
         for i in range(len(self.arms)):
             tasks.append(
                 self.arms[i].rotate(angles[i], rotation_speed, acceleration_speed)
