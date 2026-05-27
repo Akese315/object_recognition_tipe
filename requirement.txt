@@ -1,7 +1,9 @@
 feetech-servo-sdk
 opencv-python
-torch
-torchvision
 ipython
 websockets
 matplotlib
+-U scikit-learn
+albumentationsx
+tqdm
+pandas

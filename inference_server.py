@@ -48,7 +48,7 @@ class Config:
     input_size: Tuple[int, int] = (640, 480)
 
     baseline: float = 0.060
-    camera_height: float = 0.5
+    camera_height: float = 0.1
     H_POV_deg: float = 73.0
     V_POV_deg: float = 50.0
 

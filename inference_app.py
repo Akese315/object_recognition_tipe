@@ -11,8 +11,8 @@ from utils import find_objects
 from YOLO_loader import BoundingBox, CustomImage
 
 # ================= CONFIGURATION =================
-# MODEL_PATH = 'face_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36/model.pth'
-MODEL_PATH = "ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth"
+MODEL_PATH = "face_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36/model.pth"
+# MODEL_PATH = "ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth"
 
 CONF_THRESHOLD = 0.3
 CLASS_THESHOLD = 0.9
@@ -42,7 +42,7 @@ model.eval()
 
 
 # ================= BOUCLE WEBCAM =================
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 if not cap.isOpened():

@@ -13,7 +13,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-HOST = "192.168.1.68"  # Server address – change as needed
+HOST = "192.168.55.1"  # Server address – change as needed
 PORTS = (8000, 8001)  # Must match the server ports
 RECONNECT_DELAY = 2.0  # Seconds between reconnection attempts
 SOCKET_TIMEOUT = 15.0  # Seconds for socket operations

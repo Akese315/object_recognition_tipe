@@ -22,9 +22,7 @@ from YOLO_loader import BoundingBox, CustomImage
 # Configuration -------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = os.path.join(
-    "face_models", "cnn_yolo-light_reduc32-v1_fp32_2025-12-16 01-51-36", "model.pth"
-)
+MODEL_PATH = "ball_models/cnn_yolo-light_reduc32-v1_fp32_2025-12-15 13-19-10/model.pth"
 
 
 @dataclass(frozen=True)
@@ -99,10 +97,11 @@ def detect_boxes(
     input_tensor: torch.Tensor,
     model: LightweightYOLO,
 ) -> List[BoundingBox]:
-    return []
     with torch.no_grad():
-        output = model(input_tensor)  # ← ligne manquante
-        B, C, H, W = input_tensor.shape
+        output = model(input_tensor)
+        output = model.predict(output)  # ← AJOUTER CETTE LIGNE
+        B, H, W, A, S = output.shape  # ← La shape change aussi !
+
         mask = output[0, ..., 0] > CFG.confidence_threshold
 
         valid_preds = output[0][mask]
@@ -218,6 +217,9 @@ async def run_loop(model: LightweightYOLO, device: torch.device) -> None:
         frame1 = buffers.frame1.get()
         frame2 = buffers.frame2.get()
 
+        if frame1 is not None:
+            print(f"Frame size: {frame1.shape}")
+
         if frame1 is None or frame2 is None:
             consecutive_missing += 1
             gray = np.zeros((480, 1280, 3), dtype=np.uint8)
@@ -235,8 +237,8 @@ async def run_loop(model: LightweightYOLO, device: torch.device) -> None:
         frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
         frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
 
-        raw_tensor1 = transforms.ToTensor()(Image.fromarray(frame1_rgb))
-        raw_tensor2 = transforms.ToTensor()(Image.fromarray(frame2_rgb))
+        raw_tensor1 = torch.from_numpy(frame1_rgb).permute(2, 0, 1).float() / 255.0
+        raw_tensor2 = torch.from_numpy(frame2_rgb).permute(2, 0, 1).float() / 255.0
 
         inference1 = _prepare_input(raw_tensor1, reduction)
         inference2 = _prepare_input(raw_tensor2, reduction)
@@ -247,11 +249,10 @@ async def run_loop(model: LightweightYOLO, device: torch.device) -> None:
         # Inférence en parallèle (les deux threads tournent vraiment en même temps)
         #
 
-        boxes1, boxes2 = await asyncio.gather(
-            asyncio.to_thread(detect_boxes, input1, model),
-            asyncio.to_thread(detect_boxes, input2, model),
-        )
+        boxes1 = detect_boxes(input1, model)
+        boxes2 = detect_boxes(input2, model)
 
+        print(boxes1)
         # ── Caméra 1 ──────────────────────────────────────────────
         if boxes1:
             image_pil1 = inference1.get_image(
