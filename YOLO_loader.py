@@ -1,7 +1,7 @@
 import io
 import math
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -81,13 +81,13 @@ class BoundingBox:
         ratio_vec = [1.0, ratio] if ratio <= 1 else [ratio, 1.0]
         return ratio_vec
 
-    def _update_ratio_index(self, aspect_ratios: list[float]) -> int:
+    def _update_ratio_index(self, aspect_ratios: List[float]) -> int:
         """Recalcule dynamiquement le ratio_index à partir des valeurs actuelles"""
         ratio_vec = self.get_ratio()
         diffs = np.linalg.norm(np.array(aspect_ratios) - np.array(ratio_vec), axis=1)
         return int(np.argmin(diffs))
 
-    def get_bounding_box_index(self, aspect_ratios: list[float]) -> int:
+    def get_bounding_box_index(self, aspect_ratios: List[float]) -> int:
         """Retourne l'index du rapport d'aspect le plus proche (dynamique)"""
         return self._update_ratio_index(aspect_ratios)
 
@@ -172,12 +172,12 @@ class Label:
             for line in f:
                 boxes.append(
                     BoundingBox.from_file(
-                        np.array(list(map(float, line.split()))), self.num_classes
+                        np.array(List(map(float, line.split()))), self.num_classes
                     )
                 )
         return boxes
 
-    def get_bounding_boxes(self) -> list[BoundingBox]:
+    def get_bounding_boxes(self) -> List[BoundingBox]:
         return self.bb_boxes
 
 
@@ -185,7 +185,7 @@ class CustomImage:
     def __init__(
         self,
         file_name: str,
-        bounding_boxes: list[BoundingBox],
+        bounding_boxes: List[BoundingBox],
         max_size: Tuple[int, int] = None,
         reduction_factor: int = 8,
         cache_image: bool = False,
@@ -278,7 +278,7 @@ class CustomImage:
 
         return image
 
-    def set_std_mean(self, std: list[float], mean: list[float]):
+    def set_std_mean(self, std: List[float], mean: List[float]):
         self._std = std
         self._mean = mean
         self.normalize = transforms.Normalize(mean=self._mean, std=self._std)
@@ -331,7 +331,7 @@ class CustomImage:
         else:
             return self.load_image()
 
-    def get_bounding_boxes(self) -> list[BoundingBox]:
+    def get_bounding_boxes(self) -> List[BoundingBox]:
         return self._bb_boxes
 
     def get_original_size(self) -> Tuple[int, int]:
@@ -353,7 +353,7 @@ class CustomImage:
         )
         return self.resized_size
 
-    def show_image(self, predicted_bb_boxes: list[BoundingBox] = None):
+    def show_image(self, predicted_bb_boxes: List[BoundingBox] = None):
         if predicted_bb_boxes is None:
             raise Exception("No predicted bounding boxes provided.")
         image = self.get_image(predicted_bb_boxes)
@@ -364,7 +364,7 @@ class CustomImage:
 
     def get_image(
         self,
-        predicted_bb_boxes: list[BoundingBox] = None,
+        predicted_bb_boxes: List[BoundingBox] = None,
         objectness_strict: bool = True,
     ) -> PILImage:
 
@@ -492,7 +492,7 @@ class CustomImage:
         image_tensor: torch.Tensor,
         target_size: Tuple[int, int],
         reduction_factor: int,
-        bounding_boxes: list[BoundingBox] = [],
+        bounding_boxes: List[BoundingBox] = [],
         file_name: Optional[str] = None,
     ) -> "CustomImage":
         """
@@ -541,7 +541,7 @@ def get_images_file_name(directory: str):
     return files
 
 
-def get_labels(directory: str) -> list[Label]:
+def get_labels(directory: str) -> List[Label]:
     classes = get_classes(directory)
     folder_str = directory + "/labels/"
     folder = Path(folder_str)
