@@ -258,9 +258,8 @@ def compute_stereo_depth(
     P1 = A + v1 * t
     P2 = B + v2 * t_prime
 
-    print(f"P1 : {P1}")
-    print(f"P2 : {P2}")
-    print(f"Écart P1-P2 : {np.linalg.norm(P1 - P2):.4f} m")
+    print(f"P1 : x1 : {P1[0]},y1 : {P1[1]}")
+    print(f"P2 : x2 : {P2[0]},y2 : {P2[1]}")
 
     return (P1 + P2) / 2.0
 
