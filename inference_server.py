@@ -248,8 +248,9 @@ def compute_stereo_depth(
     if abs(denom) < 1e-12:
         return None
 
-    t_prime =
+    t_prime = (
         np.abs(np.dot(d, v2) * np.dot(v1, v1) - np.dot(d, v1) * np.dot(v1, v2)) / denom
+    )
 
     t = np.abs(np.dot(d, v2) * np.dot(v1, v2) - np.dot(d, v1) * np.dot(v2, v2)) / denom
 
