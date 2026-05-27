@@ -227,7 +227,6 @@ def _prepare_input(image_tensor: torch.Tensor, reduction: int) -> CustomImage:
 def compute_stereo_depth(
     x1: float, x2: float, y1: float, y2: float
 ) -> Optional[np.ndarray]:
-
     cx1, cy1 = x1 - 0.5, y1 - 0.5
     cx2, cy2 = x2 - 0.5, y2 - 0.5
 
@@ -238,9 +237,12 @@ def compute_stereo_depth(
 
     v1 = np.array([cx1 * m, k * cy1, 1.0])
     v2 = np.array([cx2 * m, k * cy2, 1.0])
-    A = np.array([-CFG.baseline / 2, CFG.camera_height, 1.0])
-    B = np.array([CFG.baseline / 2, CFG.camera_height, 1.0])
-    d = A - B
+
+    # ✅ Z=0.0 et non 1.0
+    A = np.array([-CFG.baseline / 2, CFG.camera_height, 0.0])
+    B = np.array([CFG.baseline / 2, CFG.camera_height, 0.0])
+
+    d = A - B  # = [-baseline, 0, 0]
 
     denom = np.dot(v1, v2) ** 2 - np.dot(v1, v1) * np.dot(v2, v2)
     if abs(denom) < 1e-12:
@@ -248,7 +250,19 @@ def compute_stereo_depth(
 
     t_prime = (np.dot(d, v2) * np.dot(v1, v1) - np.dot(d, v1) * np.dot(v1, v2)) / denom
     t = (np.dot(d, v2) * np.dot(v1, v2) - np.dot(d, v1) * np.dot(v2, v2)) / denom
-    return (A + B + v1 * t + v2 * t_prime) / 2.0
+
+    # Garde-fou : les deux t doivent être positifs
+    if t < 0 or t_prime < 0:
+        return None
+
+    P1 = A + v1 * t
+    P2 = B + v2 * t_prime
+
+    print(f"P1 : {P1}")
+    print(f"P2 : {P2}")
+    print(f"Écart P1-P2 : {np.linalg.norm(P1 - P2):.4f} m")
+
+    return (P1 + P2) / 2.0
 
 
 # ---------------------------------------------------------------------------
