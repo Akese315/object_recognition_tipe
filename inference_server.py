@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 @dataclass(frozen=True)
 class Config:
-    confidence_threshold: float = 0.3
+    confidence_threshold: float = 0.2
     class_threshold: float = 0.9
     model_classes: List[str] = field(default_factory=lambda: ["face"])
     # FIX 1 : même résolution que inference_app.py
