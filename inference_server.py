@@ -227,13 +227,17 @@ def _prepare_input(image_tensor: torch.Tensor, reduction: int) -> CustomImage:
 def compute_stereo_depth(
     x1: float, x2: float, y1: float, y2: float
 ) -> Optional[np.ndarray]:
+
+    cx1, cy1 = x1 - 0.5, y1 - 0.5
+    cx2, cy2 = x2 - 0.5, y2 - 0.5
+
     HPOV = math.radians(CFG.H_POV_deg)
     VPOV = math.radians(CFG.V_POV_deg)
     m = 2.0 * math.tan(HPOV / 2)
     k = 2.0 * math.tan(VPOV / 2)
 
-    v1 = np.array([x1 * m, k * y1, 1.0])
-    v2 = np.array([x2 * m, k * y2, 1.0])
+    v1 = np.array([cx1 * m, k * cy1, 1.0])
+    v2 = np.array([cx2 * m, k * cy2, 1.0])
     A = np.array([-CFG.baseline / 2, CFG.camera_height, 1.0])
     B = np.array([CFG.baseline / 2, CFG.camera_height, 1.0])
     d = A - B
