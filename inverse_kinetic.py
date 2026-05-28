@@ -265,7 +265,7 @@ class Inverse_Kinetic:
                 )
 
                 clamped_deg = self.arms[effector_index].clamp_angle(
-                    math.degrees(angle_papier) * self.arms[effector_index].sens_rotation
+                    math.degrees(angle_papier)
                 )
 
                 self.dprint(f"Clamped angle (deg)           : {self.fmt(clamped_deg)}")

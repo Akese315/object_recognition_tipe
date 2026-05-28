@@ -98,7 +98,7 @@ class Arm:
         self.running = False
 
     def clamp_angle(self, angle):
-        physical_angle = angle + self.origin
+        physical_angle = angle * self.sens_rotation + self.origin
         physical_angle = clamp(
             physical_angle, self.min_angle_limit, self.max_angle_limit
         )
