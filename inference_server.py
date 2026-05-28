@@ -65,18 +65,26 @@ CFG = Config()
 
 def gstreamer_pipeline(sensor_id: int) -> str:
     return (
-        f"nvarguscamerasrc sensor-id={sensor_id} ! "
-        # Capture en résolution native raisonnable (pas Full HD)
-        f"video/x-raw(memory:NVMM), width=1280, height=720, "
-        f"framerate=30/1, format=NV12 ! "
-        # Resize vers 640x480 sur le GPU Tegra (pas le CPU)
-        f"nvvidconv ! "
-        f"video/x-raw(memory:NVMM), width={CFG.capture_width}, height={CFG.capture_height} ! "
+        f"nvarguscamerasrc sensor-id={sensor_id} "
+        # Forcer AWB et exposition identiques sur les deux capteurs
+        f"wbmode=1 "  # 1 = incandescent, ou essayez 0 = off pour manuel
+        f"exposuretimerange='13000 13000' "  # exposition fixe identique
+        f"gainrange='1 1' "  # gain fixe identique
+        f"ispdigitalgainrange='1 1' ! "
+        # Résolution native du IMX219 (mode 2 = 1920x1080 ou mode 4 = 1280x720)
+        f"video/x-raw(memory:NVMM), "
+        f"width=1280, height=720, "
+        f"framerate=30/1, "
+        f"format=NV12 ! "
+        # Conversion couleur correcte : NV12 → BGRx → BGR
+        f"nvvidconv flip-method=0 ! "
+        f"video/x-raw(memory:NVMM), "
+        f"width={CFG.capture_width}, height={CFG.capture_height}, "
+        f"format=NV12 ! "
         f"nvvidconv ! "
         f"video/x-raw, format=BGRx ! "
         f"videoconvert ! "
         f"video/x-raw, format=BGR ! "
-        # max-buffers=1 drop=true : on ne garde que la frame la plus récente
         f"appsink max-buffers=1 drop=true sync=false"
     )
 
