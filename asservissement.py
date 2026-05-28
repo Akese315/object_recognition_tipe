@@ -22,7 +22,7 @@ async def init_robot(rbt: robot.Robot) -> None:
         min_angle_limit=90,
         max_angle_limit=270,
         sens_rotation=-1.0,
-        arm_len=np.array([0.035, 0.115, 0]),
+        arm_len=np.array([0.04, 0.115, 0]),
     )
 
     await rbt.add_arm(
@@ -53,6 +53,7 @@ async def init_robot(rbt: robot.Robot) -> None:
         sens_rotation=-1.0,
         arm_len=np.array([0, 0.06, 0]),
     )
+
     await rbt.add_arm(
         servo_moteur_id=5,
         origin=45,
@@ -62,6 +63,16 @@ async def init_robot(rbt: robot.Robot) -> None:
         sens_rotation=-1.0,
         arm_len=np.array([0, 0.1, 0]),
     )
+
+    """await rbt.add_pince(
+        servo_moteur_id=6,
+        origin=180,
+        axis="y",
+        min_angle_limit=90,
+        max_angle_limit=180,
+        sens_rotation=-1.0,
+        arm_len=np.array([0, 0.1, 0]),
+    )"""
 
 
 async def plot_motor_angles_over_time(
@@ -120,7 +131,7 @@ async def main() -> None:
         print("Running in simulation mode (no hardware).")
         rbt = robot.Robot("COM3")
     await init_robot(rbt)
-    k_u = 255
+    """ k_u = 255
     for i in range(len(rbt.arms)):
         rbt.arms[i].set_pid(15, 1, 0)
     await asyncio.sleep(0.1)
@@ -129,9 +140,9 @@ async def main() -> None:
     rbt.arms[2].set_pid(k_u, 0, 0)
     await asyncio.sleep(0.1)
     print("pid", rbt.arms[2].read_pid())
-    """calculated_angles, position = rbt.IK.run_ccd(0.2, 0.2, 0.1)
+    calculated_angles, position = rbt.IK.run_ccd(0.2, 0.2, 0.1)
     calculated_angles_degrees = calculated_angles * 360 / (2 * np.pi)
-    print(calculated_angles)"""
+    print(calculated_angles)
 
     await asyncio.sleep(1)
     test_angles = np.array([0, 0, 0, 0, 0])
@@ -145,7 +156,21 @@ async def main() -> None:
         studied_motor_id=1,
     )
 
-    await task
+    await task"""
+
+    positions_list = [
+        [0.15, 0.1, 0.1],
+    ]
+
+    for position in positions_list:
+        angles, position = rbt.IK.run_ccd(position[0], position[1], position[2])
+        angles_degrees = angles * 180 / (np.pi)
+        print(
+            f"calculated position X={position[0] * 100:.1f}cm  Y={position[1] * 100:.1f}cm  Z={position[2] * 100:.1f}cm"
+        )
+        task = asyncio.create_task(rbt._rotate_arms_async(angles_degrees, 3400, 254))
+        await asyncio.sleep(4)
+        await task
 
 
 if __name__ == "__main__":

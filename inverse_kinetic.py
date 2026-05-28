@@ -168,7 +168,7 @@ class Inverse_Kinetic:
         self.dprint(f"Initial effector: {self.fmt(end_effector_position)}")
 
         if not self.is_reachable(x_t, y_t, z_t):
-            # print("Erreur, la position n'est pas atteignable", end="\r", flush=True)
+            print("Erreur, la position n'est pas atteignable", end="\r", flush=True)
             return np.zeros(len(self.arms)), np.zeros(3)
 
         for iteration in range(self.nb_iteration):

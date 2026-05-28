@@ -134,6 +134,24 @@ class Robot:
         arm.set_arm_len(arm_len)
         self.arms.append(arm)
 
+    async def add_pince(
+        self,
+        servo_moteur_id: int,
+        origin: float,
+        axis: str,
+        min_angle_limit: float = 0,
+        max_angle_limit: float = 0,
+        sens_rotation: float = 1,
+        arm_len: np.ndarray | None = None,
+    ):
+        arm = Arm(
+            self.port_handler, self.packetHandler, servo_moteur_id, sens_rotation, axis
+        )
+        arm.set_angle_limit(min_angle_limit, max_angle_limit)
+        await arm.set_origin(origin)
+        arm.set_arm_len(arm_len)
+        self.pince = arm
+
     def __del__(self):
         self.port_handler.closePort()
 
@@ -165,6 +183,14 @@ class Robot:
             angle = math.degrees(arm.get_current_angle_radians())
             angles.append(angle)
         return angles
+
+    def fermer_pince(self):
+        print("Pince fermée")
+        asyncio.run(self.pince.rotate(30, 3400, 254))
+
+    def open_pince(self):
+        print("Pince ouverte")
+        asyncio.run(self.pince.rotate(90, 3400, 254))
 
     def move_to_2arms(self, x_t, y_t, z_axis_degrees):
         # Longueurs des bras définies dans votre code

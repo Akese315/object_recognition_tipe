@@ -228,52 +228,6 @@ def _prepare_input(image_tensor: torch.Tensor, reduction: int) -> CustomImage:
 
 
 # ---------------------------------------------------------------------------
-# Profondeur stéréo
-# ---------------------------------------------------------------------------
-
-
-def compute_stereo_depth(
-    x1: float, x2: float, y1: float, y2: float
-) -> Optional[np.ndarray]:
-    cx1, cy1 = x1 - 0.5, y1 - 0.5
-    cx2, cy2 = x2 - 0.5, y2 - 0.5
-
-    HPOV = math.radians(CFG.H_POV_deg)
-    VPOV = math.radians(CFG.V_POV_deg)
-    m = 2.0 * math.tan(HPOV / 2)
-    k = 2.0 * math.tan(VPOV / 2)
-
-    v1 = np.array([cx1 * m, k * cy1, 1.0])
-    v2 = np.array([cx2 * m, k * cy2, 1.0])
-
-    # ✅ Z=0.0 et non 1.0
-    A = np.array([-CFG.baseline / 2, CFG.camera_height, 0.0])
-    B = np.array([CFG.baseline / 2, CFG.camera_height, 0.0])
-
-    d = A - B  # = [-baseline, 0, 0]
-
-    denom = np.dot(v1, v2) ** 2 - np.dot(v1, v1) * np.dot(v2, v2)
-    if abs(denom) < 1e-12:
-        return None
-
-    t_prime = np.abs(
-        (np.dot(d, v2) * np.dot(v1, v1) - np.dot(d, v1) * np.dot(v1, v2)) / denom
-    )
-
-    t = np.abs(
-        (np.dot(d, v2) * np.dot(v1, v2) - np.dot(d, v1) * np.dot(v2, v2)) / denom
-    )
-
-    P1 = A + v1 * t
-    P2 = B + v2 * t_prime
-
-    print(f"P1 : x1 : {P1[0]},y1 : {P1[1]}")
-    print(f"P2 : x2 : {P2[0]},y2 : {P2[1]}")
-
-    return (P1 + P2) / 2.0
-
-
-# ---------------------------------------------------------------------------
 # Sérialisation
 # ---------------------------------------------------------------------------
 
@@ -376,17 +330,6 @@ def camera_worker(
 
                     boxes0 = _extract(out0)
                     boxes1 = _extract(out1)
-
-                    # Profondeur stéréo
-                    if boxes0 and boxes1:
-                        p = compute_stereo_depth(
-                            boxes0[0].x_center,
-                            boxes1[0].x_center,
-                            boxes0[0].y_center,
-                            boxes1[0].y_center,
-                        )
-                        if p is not None:
-                            logger.info("Profondeur: %.1f cm", p[2] * 100)
 
                     # Image annotée
                     res0 = (
